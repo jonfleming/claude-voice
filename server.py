@@ -282,6 +282,7 @@ class AudioBuffer:
 
 async def handle_websocket(websocket: WebSocket):
     """Handle a WebSocket connection for the voice pipeline."""
+    print("[WS] Client connected")
     await manager.connect(websocket)
 
     audio_buffer = AudioBuffer(VAD_THRESHOLD, VAD_MIN_SPEECH)
@@ -292,10 +293,14 @@ async def handle_websocket(websocket: WebSocket):
             # Receive message with timeout for VAD checking
             try:
                 data = await asyncio.wait_for(websocket.receive(), timeout=0.5)
+                print(f"[WS] Received: {list(data.keys())}")
             except asyncio.TimeoutError:
                 # Check VAD periodically
                 current_time = asyncio.get_event_loop().time()
-                if await audio_buffer.check_vad(current_time, asyncio.get_event_loop()):
+                vad_triggered = await audio_buffer.check_vad(current_time, asyncio.get_event_loop())
+                if audio_buffer.buffer:
+                    print(f"[VAD] Buffer: {len(audio_buffer.buffer)} chunks, last_audio: {audio_buffer.last_audio_time}, vad_triggered: {vad_triggered}")
+                if vad_triggered:
                     # Trigger transcription
                     audio_data = audio_buffer.get_audio()
                     if audio_data:
@@ -356,6 +361,7 @@ async def handle_websocket(websocket: WebSocket):
             elif "bytes" in data:
                 # Audio data
                 audio_chunk = data["bytes"]
+                print(f"[WS] Received audio chunk: {len(audio_chunk)} bytes")
                 current_time = asyncio.get_event_loop().time()
 
                 # Record speech start if first audio after silence
@@ -377,25 +383,265 @@ async def handle_websocket(websocket: WebSocket):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for voice AI pipeline."""
-    await handle_websocket(websocket)
+    try:
+        await handle_websocket(websocket)
+    except Exception as e:
+        print(f"[WS] Error in handler: {e}")
+        try:
+            await websocket.close(1011, str(e))
+        except:
+            pass
 
 
 @app.get("/")
 async def get_index():
-    """Serve a simple test page."""
+    """Serve a test page for uploading WAV files."""
     return HTMLResponse("""
+    <!DOCTYPE html>
     <html>
         <head>
-            <title>Voice AI Pipeline</title>
+            <title>Voice AI Pipeline - Test</title>
+            <style>
+                body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
+                button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+                input[type="file"] { padding: 10px; }
+                #log { background: #1a1a2e; color: #0f0; padding: 15px; border-radius: 8px; height: 300px; overflow-y: auto; font-family: monospace; white-space: pre-wrap; }
+                .status { padding: 5px 10px; border-radius: 4px; display: inline-block; margin: 5px 0; }
+                .connected { background: #22c55e; color: white; }
+                .disconnected { background: #ef4444; color: white; }
+                .error { background: #f97316; color: white; }
+            </style>
         </head>
         <body>
-            <h1>Voice AI Pipeline</h1>
-            <p>WebSocket server running. Connect to <code>/ws</code></p>
-            <p>Protocol:</p>
-            <ul>
-                <li>Send raw PCM audio (16-bit, 16kHz, mono) as binary</li>
-                <li>JSON messages: <code>{"type": "transcribe"}</code>, <code>{"type": "ping"}</code></li>
-            </ul>
+            <h1>Voice AI Pipeline - Test</h1>
+            <p><span id="status" class="status disconnected">Disconnected</span></p>
+
+            <h2>1. Input Source</h2>
+            <label><input type="radio" name="input" value="file" checked> WAV File</label>
+            <label><input type="radio" name="input" value="mic"> Microphone</label>
+
+            <div id="fileInput">
+                <input type="file" id="wavFile" accept=".wav">
+            </div>
+
+            <div id="micInput" style="display:none">
+                <button id="micStartBtn">Start Microphone</button>
+                <button id="micStopBtn" disabled>Stop Microphone</button>
+                <span id="micStatus"></span>
+            </div>
+
+            <h2>2. Connect & Stream</h2>
+            <button id="connectBtn">Connect</button>
+            <button id="sendBtn" disabled>Send to Server</button>
+            <button id="transcribeBtn" disabled>Force Transcribe</button>
+
+            <h2>3. Response Audio</h2>
+            <audio id="audioPlayer" controls></audio>
+
+            <h2>Log</h2>
+            <div id="log"></div>
+
+            <script>
+                let ws = null;
+                let audioContext = null;
+                let micStream = null;
+                let mediaRecorder = null;
+                let micChunks = [];
+
+                // Input source toggle
+                document.querySelectorAll('input[name="input"]').forEach(r => {
+                    r.onchange = () => {
+                        document.getElementById('fileInput').style.display = r.value === 'file' ? 'block' : 'none';
+                        document.getElementById('micInput').style.display = r.value === 'mic' ? 'block' : 'none';
+                    };
+                });
+
+                const log = document.getElementById('log');
+                const status = document.getElementById('status');
+                const connectBtn = document.getElementById('connectBtn');
+                const sendBtn = document.getElementById('sendBtn');
+                const transcribeBtn = document.getElementById('transcribeBtn');
+                const micStartBtn = document.getElementById('micStartBtn');
+                const micStopBtn = document.getElementById('micStopBtn');
+                const micStatus = document.getElementById('micStatus');
+                const audioPlayer = document.getElementById('audioPlayer');
+
+                function addLog(msg) {
+                    log.textContent += msg + '\\n';
+                    log.scrollTop = log.scrollHeight;
+                }
+
+                connectBtn.onclick = () => {
+                    if (ws) {
+                        ws.close();
+                        return;
+                    }
+
+                    ws = new WebSocket('ws://' + location.host + '/ws');
+
+                    ws.onopen = () => {
+                        status.textContent = 'Connected';
+                        status.className = 'status connected';
+                        connectBtn.textContent = 'Disconnect';
+                        sendBtn.disabled = false;
+                        transcribeBtn.disabled = false;
+                        addLog('[WS] Connected');
+                    };
+
+                    ws.onclose = () => {
+                        status.textContent = 'Disconnected';
+                        status.className = 'status disconnected';
+                        connectBtn.textContent = 'Connect';
+                        sendBtn.disabled = true;
+                        transcribeBtn.disabled = true;
+                        ws = null;
+                        addLog('[WS] Disconnected');
+                    };
+
+                    ws.onerror = (e) => {
+                        addLog('[WS] Error: ' + e);
+                        status.textContent = 'Error';
+                        status.className = 'status error';
+                    };
+
+                    ws.onmessage = (event) => {
+                        if (event.data instanceof Blob) {
+                            const url = URL.createObjectURL(event.data);
+                            audioPlayer.src = url;
+                            addLog('[WS] Received audio');
+                        } else {
+                            try {
+                                const msg = JSON.parse(event.data);
+                                addLog('[WS] ' + JSON.stringify(msg));
+                                if (msg.type === 'audio' && msg.data) {
+                                    const bytes = atob(msg.data);
+                                    const arr = new Uint8Array(bytes.length);
+                                    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+                                    const blob = new Blob([arr], { type: 'audio/wav' });
+                                    audioPlayer.src = URL.createObjectURL(blob);
+                                }
+                            } catch (e) {
+                                addLog('[WS] ' + event.data);
+                            }
+                        }
+                    };
+                };
+
+                sendBtn.onclick = () => {
+                    const fileInput = document.getElementById('wavFile');
+                    const file = fileInput.files[0];
+                    if (!file) {
+                        addLog('Please select a WAV file first');
+                        return;
+                    }
+                    if (!ws || ws.readyState !== WebSocket.OPEN) {
+                        addLog('Please connect first');
+                        return;
+                    }
+
+                    addLog('[File] Reading: ' + file.name);
+
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const arrayBuffer = e.target.result;
+                        const uint8Array = new Uint8Array(arrayBuffer);
+
+                        // Skip WAV header (44 bytes) to get raw PCM data
+                        // Assumes 16-bit mono 16kHz WAV
+                        const pcmData = uint8Array.slice(44);
+
+                        addLog('[WS] Sending ' + pcmData.length + ' bytes of audio');
+                        ws.send(pcmData);
+                    };
+                    reader.readAsArrayBuffer(file);
+                };
+
+                transcribeBtn.onclick = () => {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) {
+                        addLog('Please connect first');
+                        return;
+                    }
+                    addLog('[WS] Sending force transcribe request');
+                    ws.send(JSON.stringify({type: "transcribe"}));
+                };
+
+                // Microphone handling
+                micStartBtn.onclick = async () => {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) {
+                        addLog('Please connect first');
+                        return;
+                    }
+
+                    try {
+                        micStream = await navigator.mediaDevices.getUserMedia({ audio: true, sampleRate: 16000 });
+                        audioContext = new AudioContext({ sampleRate: 16000 });
+                        const source = audioContext.createMediaStreamSource(micStream);
+                        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                        micChunks = [];
+                        let lastSpeechTime = Date.now();
+
+                        processor.onaudioprocess = async (e) => {
+                            const inputData = e.inputBuffer.getChannelData(0);
+                            // Convert to 16-bit PCM
+                            const pcmData = new Int16Array(inputData.length);
+                            for (let i = 0; i < inputData.length; i++) {
+                                pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 32767;
+                            }
+
+                            // Simple VAD: check if there's enough energy
+                            const energy = Math.sqrt(inputData.reduce((s, v) => s + v * v, 0) / inputData.length);
+                            if (energy > 0.01) {
+                                lastSpeechTime = Date.now();
+                                micChunks.push(pcmData);
+                            } else {
+                                // Silence - check if we should send
+                                const silenceDuration = (Date.now() - lastSpeechTime) / 1000;
+                                if (silenceDuration > 1.5 && micChunks.length > 0) {
+                                    addLog('[Mic] Silence detected, sending...');
+                                    // Flatten chunks
+                                    const totalLen = micChunks.reduce((s, c) => s + c.length, 0);
+                                    const flat = new Int16Array(totalLen);
+                                    let offset = 0;
+                                    for (const c of micChunks) {
+                                        flat.set(c, offset);
+                                        offset += c.length;
+                                    }
+                                    ws.send(flat.buffer);
+                                    micChunks = [];
+                                    lastSpeechTime = Date.now();
+                                }
+                            }
+                        };
+
+                        source.connect(processor);
+                        processor.connect(audioContext.destination);
+
+                        micStartBtn.disabled = true;
+                        micStopBtn.disabled = false;
+                        micStatus.textContent = ' Recording...';
+                        addLog('[Mic] Started');
+
+                    } catch (err) {
+                        addLog('[Mic] Error: ' + err);
+                    }
+                };
+
+                micStopBtn.onclick = () => {
+                    if (micStream) {
+                        micStream.getTracks().forEach(t => t.stop());
+                        micStream = null;
+                    }
+                    if (audioContext) {
+                        audioContext.close();
+                        audioContext = null;
+                    }
+                    micStartBtn.disabled = false;
+                    micStopBtn.disabled = true;
+                    micStatus.textContent = '';
+                    addLog('[Mic] Stopped');
+                };
+            </script>
         </body>
     </html>
     """)
