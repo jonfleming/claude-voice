@@ -75,11 +75,11 @@ Edit `.env` to configure:
 | `PIPER_MODEL` | en_US-lessac-medium.onnx | Piper TTS model |
 | `AUDIO_SAMPLE_RATE` | 16000 | Audio sample rate |
 | `VAD_THRESHOLD` | 1.5 | Seconds of silence to trigger STT |
-| `WS_PORT` | 8000 | WebSocket server port |
+| `WS_PORT` | 8080 | WebSocket server port |
 
 ## WebSocket Protocol
 
-Connect to `ws://localhost:8000/ws`
+Connect to `ws://localhost:8080/ws`
 
 ### Client → Server
 
@@ -108,7 +108,7 @@ Use the included test client or a WebSocket testing tool:
 
 ```bash
 # Example with websocat (https://github.com/bufbuild/websocat)
-websocat ws://localhost:8000/ws
+websocat ws://localhost:8080/ws
 ```
 
 For audio testing, you'll need to send proper PCM audio data from a client.

@@ -52,12 +52,12 @@ Edit `.env` file:
 - `OLLAMA_HOST` - Ollama API endpoint (default: http://localhost:11434)
 - `OLLAMA_MODEL` - Model name (default: llama3)
 - `PIPER_MODEL` - TTS model file
-- `WS_PORT` - WebSocket port (default: 8000)
+- `WS_PORT` - WebSocket port (default: 8080)
 - `VAD_THRESHOLD` - Seconds of silence to trigger transcription (default: 1.5)
 
 ## WebSocket Protocol
 
-Connect to `ws://localhost:8000/ws`
+Connect to `ws://localhost:8080/ws`
 
 **Client → Server:**
 - Binary: Raw PCM audio (16-bit, 16kHz, mono)

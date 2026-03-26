@@ -60,7 +60,29 @@ uv pip install -r requirements.txt
 ```bash
 python server.py
 ```
-By default, the server runs on `0.0.0.0:8000`. You can access a simple web-based test client at `http://localhost:8000/`.
+By default, the server runs on `0.0.0.0:8080`. You can access a simple web-based test client at `http://localhost:8080/`.
+
+---
+
+## VAD Calibration and Testing
+
+### 1. Calibrating VAD Threshold
+To find the optimal `VAD_ENERGY_THRESHOLD` for your environment:
+1.  Record a short WAV file (16kHz, 16-bit, Mono) with some background noise and speech.
+2.  Run the calibration tool:
+    ```bash
+    python calibrate_vad.py your_audio.wav
+    ```
+3.  Note the RMS energy during silence vs speech and update `VAD_ENERGY_THRESHOLD` in your `.env` or as an environment variable.
+
+### 2. Testing the Pipeline
+To test the end-to-end pipeline with an existing recording:
+1.  Start the server: `python server.py`
+2.  Run the streaming test tool:
+    ```bash
+    python test_vad_stream.py your_audio.wav
+    ```
+This will simulate real-time streaming and show when the server triggers transcription and LLM responses.
 
 ---
 

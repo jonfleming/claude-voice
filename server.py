@@ -35,8 +35,9 @@ PIPER_MODEL_DIR = os.getenv("PIPER_MODEL_DIR", "")
 AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
 VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "1.5"))
 VAD_MIN_SPEECH = float(os.getenv("VAD_MIN_SPEECH", "0.3"))
+VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.01"))
 WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
-WS_PORT = int(os.getenv("WS_PORT", "8000"))
+WS_PORT = int(os.getenv("WS_PORT", "8080"))
 
 # Global models (loaded once)
 whisper_model: Optional[WhisperModel] = None
@@ -74,32 +75,12 @@ async def load_whisper_model():
     return whisper_model
 
 
-def detect_silence(audio_data: bytes, sample_rate: int = 16000, threshold: float = 0.01) -> float:
-    """Detect silence in audio. Returns duration of silence in seconds."""
-    audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-
-    # Calculate RMS energy
-    window_size = sample_rate // 10  # 100ms windows
-    energy = []
-
-    for i in range(0, len(audio_np) - window_size, window_size):
-        window = audio_np[i:i + window_size]
-        rms = np.sqrt(np.mean(window ** 2))
-        energy.append(rms)
-
-    if not energy:
+def get_rms(audio_data: bytes) -> float:
+    """Calculate RMS energy of audio data."""
+    if not audio_data:
         return 0.0
-
-    # Count consecutive silent windows
-    silent_count = 0
-    for e in energy:
-        if e < threshold:
-            silent_count += 1
-        else:
-            silent_count = 0
-
-    # Return silent duration
-    return (silent_count * window_size) / sample_rate
+    audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+    return np.sqrt(np.mean(audio_np ** 2)) if len(audio_np) > 0 else 0.0
 
 
 async def transcribe_audio(audio_data: bytes) -> str:
@@ -155,16 +136,31 @@ async def stream_to_ollama(prompt: str, websocket: WebSocket) -> str:
                                     "content": token
                                 })
 
-                                # Generate TTS for every ~20 chars (word boundary approximation)
-                                if len(pending_text) >= 20:
-                                    audio = await text_to_speech(pending_text)
-                                    if audio:
-                                        audio_b64 = base64.b64encode(audio).decode()
-                                        await websocket.send_json({
-                                            "type": "audio",
-                                            "data": audio_b64
-                                        })
-                                    pending_text = ""
+                                # Generate TTS on sentence boundaries or if too long
+                                if (len(pending_text) >= 30 and any(c in pending_text for c in ".!?\n")) or len(pending_text) >= 120:
+                                    # Try to split at the last punctuation to keep sentence integrity
+                                    last_punct = -1
+                                    for i, char in enumerate(reversed(pending_text)):
+                                        if char in ".!?\n":
+                                            last_punct = len(pending_text) - i
+                                            break
+                                    
+                                    if last_punct != -1:
+                                        text_segment = pending_text[:last_punct]
+                                        pending_text = pending_text[last_punct:]
+                                    else:
+                                        text_segment = pending_text
+                                        pending_text = ""
+
+                                    if text_segment.strip():
+                                        audio = await text_to_speech(text_segment)
+                                        if audio:
+                                            audio_b64 = base64.b64encode(audio).decode()
+                                            await websocket.send_json({
+                                                "type": "audio",
+                                                "data": audio_b64
+                                            })
+
 
                         except json.JSONDecodeError:
                             continue
@@ -235,19 +231,53 @@ async def text_to_speech(text: str) -> Optional[bytes]:
 
 
 class AudioBuffer:
-    """Audio buffer with VAD detection."""
+    """Audio buffer with content-aware VAD detection."""
 
-    def __init__(self, vad_threshold: float = 1.5, min_speech: float = 0.3):
+    def __init__(self, vad_threshold: float = 1.5, min_speech: float = 0.3, energy_threshold: float = 0.01, sample_rate: int = 16000):
         self.buffer: list[bytes] = []
         self.vad_threshold = vad_threshold
         self.min_speech = min_speech
+        self.energy_threshold = energy_threshold
+        self.sample_rate = sample_rate
         self.last_audio_time: Optional[float] = None
         self.speech_start_time: Optional[float] = None
+        self.silent_duration: float = 0.0
 
     def add(self, chunk: bytes, current_time: float):
-        """Add audio chunk to buffer."""
+        """Add audio chunk to buffer and update VAD state."""
         self.buffer.append(chunk)
         self.last_audio_time = current_time
+
+        # Process in windows of 100ms for more accurate VAD
+        window_size_bytes = int(self.sample_rate * 0.1 * 2) # 100ms window (16-bit mono)
+        
+        if len(chunk) <= window_size_bytes:
+            rms = get_rms(chunk)
+            duration = len(chunk) / (2 * self.sample_rate)
+            self._update_vad(rms, duration, current_time)
+        else:
+            # Split into windows
+            for i in range(0, len(chunk), window_size_bytes):
+                window = chunk[i:i+window_size_bytes]
+                if not window: continue
+                rms = get_rms(window)
+                duration = len(window) / (2 * self.sample_rate)
+                self._update_vad(rms, duration, current_time)
+
+    def _update_vad(self, rms: float, duration: float, current_time: float):
+        """Internal VAD state update."""
+        if rms < self.energy_threshold:
+            self.silent_duration += duration
+        else:
+            # Speech detected
+            if self.speech_start_time is None:
+                self.speech_start_time = current_time
+            self.silent_duration = 0.0
+
+    def add_silence(self, duration: float):
+        """Manually add silence duration (used on connection timeouts)."""
+        if self.buffer:
+            self.silent_duration += duration
 
     def get_audio(self) -> bytes:
         """Get all buffered audio."""
@@ -257,25 +287,26 @@ class AudioBuffer:
         """Clear the buffer."""
         self.buffer = []
         self.speech_start_time = None
+        self.silent_duration = 0.0
 
-    async def check_vad(self, current_time: float, loop: asyncio.AbstractEventLoop) -> bool:
+    def check_vad(self) -> bool:
         """Check if we should trigger transcription (VAD)."""
-        if not self.buffer or not self.last_audio_time:
+        if not self.buffer:
             return False
 
-        # Time since last audio
-        silence_duration = current_time - self.last_audio_time
-
-        # Need at least threshold seconds of silence
-        if silence_duration >= self.vad_threshold:
-            # Check we have enough speech
+        # If silence has lasted longer than threshold
+        if self.silent_duration >= self.vad_threshold:
+            # Check we have enough speech duration to care
             if self.speech_start_time:
                 speech_duration = self.last_audio_time - self.speech_start_time
                 if speech_duration >= self.min_speech:
                     return True
             else:
-                # No speech start recorded, just transcribe what's there
-                return True
+                # No speech start recorded, but buffer has content (maybe it was all below threshold)
+                # If we have more than threshold of audio, just trigger it anyway
+                buffer_duration = sum(len(b) for b in self.buffer) / (2 * self.sample_rate)
+                if buffer_duration >= self.vad_threshold:
+                    return True
 
         return False
 
@@ -285,43 +316,48 @@ async def handle_websocket(websocket: WebSocket):
     print("[WS] Client connected")
     await manager.connect(websocket)
 
-    audio_buffer = AudioBuffer(VAD_THRESHOLD, VAD_MIN_SPEECH)
-    vad_task: Optional[asyncio.Task] = None
+    audio_buffer = AudioBuffer(VAD_THRESHOLD, VAD_MIN_SPEECH, VAD_ENERGY_THRESHOLD, AUDIO_SAMPLE_RATE)
+
+
+    async def trigger_transcription():
+        """Helper to trigger transcription and LLM response."""
+        audio_data = audio_buffer.get_audio()
+        audio_buffer.clear() # Clear immediately to avoid double triggers
+        
+        if not audio_data:
+            return
+
+        print(f"[VAD] Triggering transcription ({len(audio_data)} bytes)")
+        await websocket.send_json({"type": "transcribing", "content": ""})
+        text = await transcribe_audio(audio_data)
+
+        if text:
+            print(f"[STT] {text}")
+            await websocket.send_json({
+                "type": "text",
+                "content": text
+            })
+
+            # Send to LLM and get TTS response
+            response = await stream_to_ollama(text, websocket)
+            await websocket.send_json({
+                "type": "done",
+                "content": response
+            })
+        else:
+            print("[STT] No speech detected")
+            await websocket.send_json({"type": "done", "content": ""})
 
     try:
         while True:
             # Receive message with timeout for VAD checking
             try:
                 data = await asyncio.wait_for(websocket.receive(), timeout=0.5)
-                print(f"[WS] Received: {list(data.keys())}")
             except asyncio.TimeoutError:
-                # Check VAD periodically
-                current_time = asyncio.get_event_loop().time()
-                vad_triggered = await audio_buffer.check_vad(current_time, asyncio.get_event_loop())
-                if audio_buffer.buffer:
-                    print(f"[VAD] Buffer: {len(audio_buffer.buffer)} chunks, last_audio: {audio_buffer.last_audio_time}, vad_triggered: {vad_triggered}")
-                if vad_triggered:
-                    # Trigger transcription
-                    audio_data = audio_buffer.get_audio()
-                    if audio_data:
-                        # Transcribe
-                        await websocket.send_json({"type": "transcribing", "content": ""})
-                        text = await transcribe_audio(audio_data)
-
-                        if text:
-                            await websocket.send_json({
-                                "type": "text",
-                                "content": text
-                            })
-
-                            # Send to LLM and get TTS response
-                            response = await stream_to_ollama(text, websocket)
-                            await websocket.send_json({
-                                "type": "done",
-                                "content": response
-                            })
-
-                        audio_buffer.clear()
+                # Check VAD on timeout (handles case where client stops sending)
+                audio_buffer.add_silence(0.5)
+                if audio_buffer.check_vad():
+                    await trigger_transcription()
                 continue
 
             if "text" in data:
@@ -336,47 +372,32 @@ async def handle_websocket(websocket: WebSocket):
                 if msg_type == "ping":
                     await websocket.send_json({"type": "pong"})
                 elif msg_type == "transcribe":
-                    # Force transcribe current buffer
-                    audio_data = audio_buffer.get_audio()
-                    if audio_data:
-                        text = await transcribe_audio(audio_data)
-                        await websocket.send_json({
-                            "type": "text",
-                            "content": text
-                        })
-                        audio_buffer.clear()
+                    await trigger_transcription()
                 elif msg_type == "stream":
-                    # Stream mode: process immediately without waiting for silence
-                    audio_data = audio_buffer.get_audio()
-                    if audio_data:
-                        text = await transcribe_audio(audio_data)
-                        if text:
-                            await websocket.send_json({
-                                "type": "text",
-                                "content": text
-                            })
-                            response = await stream_to_ollama(text, websocket)
-                        audio_buffer.clear()
+                    # Force process current buffer
+                    await trigger_transcription()
 
             elif "bytes" in data:
                 # Audio data
                 audio_chunk = data["bytes"]
-                print(f"[WS] Received audio chunk: {len(audio_chunk)} bytes")
                 current_time = asyncio.get_event_loop().time()
-
-                # Record speech start if first audio after silence
-                if audio_buffer.speech_start_time is None:
-                    audio_buffer.speech_start_time = current_time
-
                 audio_buffer.add(audio_chunk, current_time)
+
+                # Check VAD after each chunk (handles continuous streaming)
+                if audio_buffer.check_vad():
+                    await trigger_transcription()
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
-        await websocket.send_json({
-            "type": "error",
-            "content": str(e)
-        })
+        print(f"[WS] Error: {e}")
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "content": str(e)
+            })
+        except:
+            pass
         manager.disconnect(websocket)
 
 
@@ -445,8 +466,7 @@ async def get_index():
                 let ws = null;
                 let audioContext = null;
                 let micStream = null;
-                let mediaRecorder = null;
-                let micChunks = [];
+                let processor = null;
 
                 // Input source toggle
                 document.querySelectorAll('input[name="input"]').forEach(r => {
@@ -512,13 +532,18 @@ async def get_index():
                         } else {
                             try {
                                 const msg = JSON.parse(event.data);
-                                addLog('[WS] ' + JSON.stringify(msg));
-                                if (msg.type === 'audio' && msg.data) {
+                                if (msg.type === 'response') {
+                                    // Token response - too noisy for log
+                                } else if (msg.type === 'audio' && msg.data) {
                                     const bytes = atob(msg.data);
                                     const arr = new Uint8Array(bytes.length);
                                     for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
                                     const blob = new Blob([arr], { type: 'audio/wav' });
                                     audioPlayer.src = URL.createObjectURL(blob);
+                                    audioPlayer.play();
+                                    addLog('[WS] Received audio response');
+                                } else {
+                                    addLog('[WS] ' + JSON.stringify(msg));
                                 }
                             } catch (e) {
                                 addLog('[WS] ' + event.data);
@@ -547,7 +572,6 @@ async def get_index():
                         const uint8Array = new Uint8Array(arrayBuffer);
 
                         // Skip WAV header (44 bytes) to get raw PCM data
-                        // Assumes 16-bit mono 16kHz WAV
                         const pcmData = uint8Array.slice(44);
 
                         addLog('[WS] Sending ' + pcmData.length + ' bytes of audio');
@@ -573,15 +597,12 @@ async def get_index():
                     }
 
                     try {
-                        micStream = await navigator.mediaDevices.getUserMedia({ audio: true, sampleRate: 16000 });
+                        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                         audioContext = new AudioContext({ sampleRate: 16000 });
                         const source = audioContext.createMediaStreamSource(micStream);
-                        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+                        processor = audioContext.createScriptProcessor(4096, 1, 1);
 
-                        micChunks = [];
-                        let lastSpeechTime = Date.now();
-
-                        processor.onaudioprocess = async (e) => {
+                        processor.onaudioprocess = (e) => {
                             const inputData = e.inputBuffer.getChannelData(0);
                             // Convert to 16-bit PCM
                             const pcmData = new Int16Array(inputData.length);
@@ -589,28 +610,9 @@ async def get_index():
                                 pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 32767;
                             }
 
-                            // Simple VAD: check if there's enough energy
-                            const energy = Math.sqrt(inputData.reduce((s, v) => s + v * v, 0) / inputData.length);
-                            if (energy > 0.01) {
-                                lastSpeechTime = Date.now();
-                                micChunks.push(pcmData);
-                            } else {
-                                // Silence - check if we should send
-                                const silenceDuration = (Date.now() - lastSpeechTime) / 1000;
-                                if (silenceDuration > 1.5 && micChunks.length > 0) {
-                                    addLog('[Mic] Silence detected, sending...');
-                                    // Flatten chunks
-                                    const totalLen = micChunks.reduce((s, c) => s + c.length, 0);
-                                    const flat = new Int16Array(totalLen);
-                                    let offset = 0;
-                                    for (const c of micChunks) {
-                                        flat.set(c, offset);
-                                        offset += c.length;
-                                    }
-                                    ws.send(flat.buffer);
-                                    micChunks = [];
-                                    lastSpeechTime = Date.now();
-                                }
+                            // Stream to server
+                            if (ws && ws.readyState === WebSocket.OPEN) {
+                                ws.send(pcmData.buffer);
                             }
                         };
 
@@ -620,7 +622,7 @@ async def get_index():
                         micStartBtn.disabled = true;
                         micStopBtn.disabled = false;
                         micStatus.textContent = ' Recording...';
-                        addLog('[Mic] Started');
+                        addLog('[Mic] Started streaming');
 
                     } catch (err) {
                         addLog('[Mic] Error: ' + err);
@@ -628,6 +630,10 @@ async def get_index():
                 };
 
                 micStopBtn.onclick = () => {
+                    if (processor) {
+                        processor.disconnect();
+                        processor = null;
+                    }
                     if (micStream) {
                         micStream.getTracks().forEach(t => t.stop());
                         micStream = null;
