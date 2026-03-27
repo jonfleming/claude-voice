@@ -104,6 +104,7 @@ async def stream_to_ollama(prompt: str, websocket: WebSocket) -> str:
     """Send prompt to Ollama and stream the response with TTS."""
     global piper_process
 
+    print(f"[Ollama] Sending prompt: {prompt}")
     url = f"{OLLAMA_HOST}/api/generate"
     payload = {
         "model": OLLAMA_MODEL,
@@ -119,7 +120,10 @@ async def stream_to_ollama(prompt: str, websocket: WebSocket) -> str:
             async with session.post(url, json=payload) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
+                    print(f"[Ollama] Error: {resp.status} - {error_text}")
                     raise Exception(f"Ollama error: {error_text}")
+
+                print(f"[Ollama] Connection successful, streaming response...")
 
                 async for line in resp.content:
                     if line:
@@ -153,6 +157,7 @@ async def stream_to_ollama(prompt: str, websocket: WebSocket) -> str:
                                         pending_text = ""
 
                                     if text_segment.strip():
+                                        print(f"[TTS] Generating audio for: {text_segment.strip()}")
                                         audio = await text_to_speech(text_segment)
                                         if audio:
                                             audio_b64 = base64.b64encode(audio).decode()
@@ -167,6 +172,7 @@ async def stream_to_ollama(prompt: str, websocket: WebSocket) -> str:
 
                 # Generate final TTS for remaining text
                 if pending_text.strip():
+                    print(f"[TTS] Generating final audio for: {pending_text.strip()}")
                     audio = await text_to_speech(pending_text)
                     if audio:
                         audio_b64 = base64.b64encode(audio).decode()
@@ -175,9 +181,15 @@ async def stream_to_ollama(prompt: str, websocket: WebSocket) -> str:
                             "data": audio_b64
                         })
 
-    except aiohttp.ClientError as e:
-        raise Exception(f"Failed to connect to Ollama: {e}")
+    except Exception as e:
+        print(f"[Ollama] Exception: {e}")
+        await websocket.send_json({
+            "type": "error",
+            "content": f"Ollama connection error: {str(e)}"
+        })
+        raise
 
+    print(f"[Ollama] Stream complete ({len(response_text)} chars)")
     return response_text
 
 
@@ -186,41 +198,34 @@ async def text_to_speech(text: str) -> Optional[bytes]:
     if not text.strip():
         return None
 
-    global piper_process
     model_path = PIPER_MODEL
     if PIPER_MODEL_DIR:
         model_path = str(Path(PIPER_MODEL_DIR) / PIPER_MODEL)
 
     try:
-        # Start Piper process if needed
-        if piper_process is None or piper_process.returncode is not None:
-            if piper_process and piper_process.returncode is not None:
-                await piper_process.wait()
-            piper_process = await asyncio.create_subprocess_exec(
-                "piper",
-                "--model", model_path,
-                "--output_file", "-",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+        # Create a fresh process for each segment to ensure stdout is flushed and EOF is reached
+        process = await asyncio.create_subprocess_exec(
+            "piper",
+            "--model", model_path,
+            "--output_file", "-",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
 
-        # Send text to Piper
-        piper_process.stdin.write(text.encode() + b"\n")
-        await piper_process.stdin.drain()
+        # Send text and close stdin to signal EOF to Piper
+        stdout, stderr = await process.communicate(input=text.encode() + b"\n")
 
-        # Read audio output
-        audio_chunks = []
-        try:
-            while True:
-                chunk = await asyncio.wait_for(piper_process.stdout.read(4096), timeout=5.0)
-                if not chunk:
-                    break
-                audio_chunks.append(chunk)
-        except asyncio.TimeoutError:
-            pass
+        if process.returncode != 0:
+            print(f"TTS error (code {process.returncode}): {stderr.decode()}")
+            return None
 
-        return b"".join(audio_chunks)
+        if stdout:
+            print(f"[TTS] Generated {len(stdout)} bytes of audio")
+            return stdout
+        
+        print("[TTS] No audio data generated")
+        return None
 
     except FileNotFoundError:
         print("Piper not found. Make sure piper is in PATH.")
@@ -301,12 +306,11 @@ class AudioBuffer:
                 speech_duration = self.last_audio_time - self.speech_start_time
                 if speech_duration >= self.min_speech:
                     return True
-            else:
-                # No speech start recorded, but buffer has content (maybe it was all below threshold)
-                # If we have more than threshold of audio, just trigger it anyway
-                buffer_duration = sum(len(b) for b in self.buffer) / (2 * self.sample_rate)
-                if buffer_duration >= self.vad_threshold:
-                    return True
+            
+            # If we have reached the silence threshold but never detected speech,
+            # or speech was too short, clear the buffer to avoid it growing indefinitely.
+            if self.silent_duration > self.vad_threshold * 2:
+                self.clear()
 
         return False
 
@@ -321,6 +325,10 @@ async def handle_websocket(websocket: WebSocket):
 
     async def trigger_transcription():
         """Helper to trigger transcription and LLM response."""
+        if not audio_buffer.speech_start_time:
+            audio_buffer.clear()
+            return
+
         audio_data = audio_buffer.get_audio()
         audio_buffer.clear() # Clear immediately to avoid double triggers
         
@@ -431,21 +439,28 @@ async def get_index():
                 .connected { background: #22c55e; color: white; }
                 .disconnected { background: #ef4444; color: white; }
                 .error { background: #f97316; color: white; }
+                .debug-only { display: none; }
             </style>
         </head>
         <body>
             <h1>Voice AI Pipeline - Test</h1>
             <p><span id="status" class="status disconnected">Disconnected</span></p>
 
-            <h2>1. Input Source</h2>
-            <label><input type="radio" name="input" value="file" checked> WAV File</label>
-            <label><input type="radio" name="input" value="mic"> Microphone</label>
+            <div style="margin-bottom: 20px;">
+                <label><input type="checkbox" id="debugToggle"> Show Debug Options (File Upload)</label>
+            </div>
 
-            <div id="fileInput">
+            <h2>1. Input Source</h2>
+            <div class="debug-only">
+                <label><input type="radio" name="input" value="file"> WAV File</label>
+            </div>
+            <label><input type="radio" name="input" value="mic" checked> Microphone</label>
+
+            <div id="fileInput" class="debug-only" style="display:none">
                 <input type="file" id="wavFile" accept=".wav">
             </div>
 
-            <div id="micInput" style="display:none">
+            <div id="micInput">
                 <button id="micStartBtn">Start Microphone</button>
                 <button id="micStopBtn" disabled>Stop Microphone</button>
                 <span id="micStatus"></span>
@@ -453,7 +468,7 @@ async def get_index():
 
             <h2>2. Connect & Stream</h2>
             <button id="connectBtn">Connect</button>
-            <button id="sendBtn" disabled>Send to Server</button>
+            <button id="sendBtn" class="debug-only" disabled>Send to Server</button>
             <button id="transcribeBtn" disabled>Force Transcribe</button>
 
             <h2>3. Response Audio</h2>
@@ -467,11 +482,24 @@ async def get_index():
                 let audioContext = null;
                 let micStream = null;
                 let processor = null;
+                
+                let isServerProcessing = false;
+                let isPlaying = false;
+                let audioQueue = [];
+
+                const debugToggle = document.getElementById('debugToggle');
+                const debugElements = document.querySelectorAll('.debug-only');
+
+                debugToggle.onchange = () => {
+                    debugElements.forEach(el => {
+                        el.style.display = debugToggle.checked ? (el.tagName === 'DIV' ? 'block' : 'inline-block') : 'none';
+                    });
+                };
 
                 // Input source toggle
                 document.querySelectorAll('input[name="input"]').forEach(r => {
                     r.onchange = () => {
-                        document.getElementById('fileInput').style.display = r.value === 'file' ? 'block' : 'none';
+                        document.getElementById('fileInput').style.display = (r.value === 'file' && debugToggle.checked) ? 'block' : 'none';
                         document.getElementById('micInput').style.display = r.value === 'mic' ? 'block' : 'none';
                     };
                 });
@@ -490,6 +518,28 @@ async def get_index():
                     log.textContent += msg + '\\n';
                     log.scrollTop = log.scrollHeight;
                 }
+
+                function playNextAudio() {
+                    console.log('Checking audio queue, length:', audioQueue.length);
+                    if (audioQueue.length === 0) {
+                        isPlaying = false;
+                        return;
+                    }
+
+                    log.textContent += '[Audio] Playing response, queue length: ' + audioQueue.length + '\\n';
+                    isPlaying = true;
+                    const blobUrl = audioQueue.shift();
+                    audioPlayer.src = blobUrl;
+                    audioPlayer.play().catch(e => {
+                        console.error('Playback error:', e);
+                        playNextAudio();
+                    });
+                }
+
+                audioPlayer.onended = () => {
+                    console.log('Audio ended, playing next if available');
+                    playNextAudio();
+                };
 
                 connectBtn.onclick = () => {
                     if (ws) {
@@ -526,24 +576,34 @@ async def get_index():
 
                     ws.onmessage = (event) => {
                         if (event.data instanceof Blob) {
-                            const url = URL.createObjectURL(event.data);
-                            audioPlayer.src = url;
-                            addLog('[WS] Received audio');
+                            // Raw blob handling (if any)
                         } else {
                             try {
                                 const msg = JSON.parse(event.data);
-                                if (msg.type === 'response') {
-                                    // Token response - too noisy for log
+                                console.log('Received message:', msg.type);
+                                
+                                if (msg.type === 'transcribing') {
+                                    isServerProcessing = true;
+                                    addLog('[WS] Transcribing...');
+                                } else if (msg.type === 'done') {
+                                    isServerProcessing = false;
+                                    addLog('[WS] Response complete');
+                                } else if (msg.type === 'text') {
+                                    addLog('[STT] ' + msg.content);
+                                } else if (msg.type === 'error') {
+                                    addLog('[Error] ' + msg.content);
+                                    isServerProcessing = false;
                                 } else if (msg.type === 'audio' && msg.data) {
+                                    console.log('Received audio data, length:', msg.data.length);
                                     const bytes = atob(msg.data);
                                     const arr = new Uint8Array(bytes.length);
                                     for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
                                     const blob = new Blob([arr], { type: 'audio/wav' });
-                                    audioPlayer.src = URL.createObjectURL(blob);
-                                    audioPlayer.play();
-                                    addLog('[WS] Received audio response');
-                                } else {
-                                    addLog('[WS] ' + JSON.stringify(msg));
+                                    const url = URL.createObjectURL(blob);
+                                    audioQueue.push(url);
+                                    if (!isPlaying) {
+                                        playNextAudio();
+                                    }
                                 }
                             } catch (e) {
                                 addLog('[WS] ' + event.data);
@@ -603,6 +663,11 @@ async def get_index():
                         processor = audioContext.createScriptProcessor(4096, 1, 1);
 
                         processor.onaudioprocess = (e) => {
+                            // Block sending if server is processing or AI is speaking
+                            if (isServerProcessing || isPlaying) {
+                                return;
+                            }
+
                             const inputData = e.inputBuffer.getChannelData(0);
                             // Convert to 16-bit PCM
                             const pcmData = new Int16Array(inputData.length);
