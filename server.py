@@ -105,6 +105,7 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
     global piper_process
 
     print(f"[Ollama] Sending {len(messages)} messages in history")
+    print(f"[Ollama] Last user message: {messages[-1]['content'] if messages else 'N/A'}")
     url = f"{OLLAMA_HOST}/api/chat"
     payload = {
         "model": OLLAMA_MODEL,
@@ -448,6 +449,7 @@ async def get_index():
                 .disconnected { background: #ef4444; color: white; }
                 .error { background: #f97316; color: white; }
                 .debug-only { display: none; }
+                #visualizer { background: #000; border-radius: 8px; width: 100%; height: 100px; margin: 10px 0; display: none; }
             </style>
         </head>
         <body>
@@ -469,6 +471,7 @@ async def get_index():
             </div>
 
             <div id="micInput">
+                <canvas id="visualizer"></canvas>
                 <button id="micStartBtn">Start Microphone</button>
                 <button id="micStopBtn" disabled>Stop Microphone</button>
                 <span id="micStatus"></span>
@@ -490,6 +493,8 @@ async def get_index():
                 let audioContext = null;
                 let micStream = null;
                 let processor = null;
+                let analyser = null;
+                let animationId = null;
                 
                 let isServerProcessing = false;
                 let isPlaying = false;
@@ -521,6 +526,8 @@ async def get_index():
                 const micStopBtn = document.getElementById('micStopBtn');
                 const micStatus = document.getElementById('micStatus');
                 const audioPlayer = document.getElementById('audioPlayer');
+                const visualizer = document.getElementById('visualizer');
+                const canvasCtx = visualizer.getContext('2d');
 
                 function addLog(msg) {
                     log.textContent += msg + '\\n';
@@ -668,6 +675,45 @@ async def get_index():
                         micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                         audioContext = new AudioContext({ sampleRate: 16000 });
                         const source = audioContext.createMediaStreamSource(micStream);
+                        
+                        // Setup Analyser for visualization
+                        analyser = audioContext.createAnalyser();
+                        analyser.fftSize = 2048;
+                        const bufferLength = analyser.frequencyBinCount;
+                        const dataArray = new Uint8Array(bufferLength);
+                        
+                        visualizer.style.display = 'block';
+                        
+                        function draw() {
+                            animationId = requestAnimationFrame(draw);
+                            analyser.getByteTimeDomainData(dataArray);
+
+                            canvasCtx.fillStyle = 'rgb(0, 0, 0)';
+                            canvasCtx.fillRect(0, 0, visualizer.width, visualizer.height);
+                            canvasCtx.lineWidth = 2;
+                            canvasCtx.strokeStyle = isServerProcessing || isPlaying ? 'rgb(100, 100, 100)' : 'rgb(0, 255, 0)';
+                            canvasCtx.beginPath();
+
+                            let sliceWidth = visualizer.width * 1.0 / bufferLength;
+                            let x = 0;
+
+                            for (let i = 0; i < bufferLength; i++) {
+                                let v = dataArray[i] / 128.0;
+                                let y = v * visualizer.height / 2;
+
+                                if (i === 0) {
+                                    canvasCtx.moveTo(x, y);
+                                } else {
+                                    canvasCtx.lineTo(x, y);
+                                }
+                                x += sliceWidth;
+                            }
+
+                            canvasCtx.lineTo(visualizer.width, visualizer.height / 2);
+                            canvasCtx.stroke();
+                        }
+                        draw();
+
                         processor = audioContext.createScriptProcessor(4096, 1, 1);
 
                         processor.onaudioprocess = (e) => {
@@ -689,7 +735,8 @@ async def get_index():
                             }
                         };
 
-                        source.connect(processor);
+                        source.connect(analyser);
+                        analyser.connect(processor);
                         processor.connect(audioContext.destination);
 
                         micStartBtn.disabled = true;
@@ -703,6 +750,13 @@ async def get_index():
                 };
 
                 micStopBtn.onclick = () => {
+                    if (animationId) {
+                        cancelAnimationFrame(animationId);
+                        animationId = null;
+                    }
+                    if (visualizer) {
+                        visualizer.style.display = 'none';
+                    }
                     if (processor) {
                         processor.disconnect();
                         processor = null;
