@@ -30,7 +30,7 @@ load_dotenv()
 # Configuration
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
-PIPER_MODEL = os.getenv("PIPER_MODEL", "en_US-lessac-medium.onnx")
+PIPER_MODEL = os.getenv("PIPER_MODEL", "en_US-amy-medium.onnx")
 PIPER_MODEL_DIR = os.getenv("PIPER_MODEL_DIR", "")
 AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
 VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "1.5"))
@@ -100,15 +100,15 @@ async def transcribe_audio(audio_data: bytes) -> str:
     return text.strip()
 
 
-async def stream_to_ollama(prompt: str, websocket: WebSocket) -> str:
-    """Send prompt to Ollama and stream the response with TTS."""
+async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
+    """Send message history to Ollama and stream the response with TTS."""
     global piper_process
 
-    print(f"[Ollama] Sending prompt: {prompt}")
-    url = f"{OLLAMA_HOST}/api/generate"
+    print(f"[Ollama] Sending {len(messages)} messages in history")
+    url = f"{OLLAMA_HOST}/api/chat"
     payload = {
         "model": OLLAMA_MODEL,
-        "prompt": prompt,
+        "messages": messages,
         "stream": True
     }
 
@@ -123,14 +123,14 @@ async def stream_to_ollama(prompt: str, websocket: WebSocket) -> str:
                     print(f"[Ollama] Error: {resp.status} - {error_text}")
                     raise Exception(f"Ollama error: {error_text}")
 
-                print(f"[Ollama] Connection successful, streaming response...")
+                print(f"[Ollama] Connection successful, streaming chat response...")
 
                 async for line in resp.content:
                     if line:
                         try:
                             data = json.loads(line)
-                            if "response" in data:
-                                token = data["response"]
+                            if "message" in data and "content" in data["message"]:
+                                token = data["message"]["content"]
                                 response_text += token
                                 pending_text += token
 
@@ -321,6 +321,7 @@ async def handle_websocket(websocket: WebSocket):
     await manager.connect(websocket)
 
     audio_buffer = AudioBuffer(VAD_THRESHOLD, VAD_MIN_SPEECH, VAD_ENERGY_THRESHOLD, AUDIO_SAMPLE_RATE)
+    chat_history: list[dict] = []
 
 
     async def trigger_transcription():
@@ -346,8 +347,15 @@ async def handle_websocket(websocket: WebSocket):
                 "content": text
             })
 
+            # Add to history
+            chat_history.append({"role": "user", "content": text})
+
             # Send to LLM and get TTS response
-            response = await stream_to_ollama(text, websocket)
+            response = await stream_to_ollama(chat_history, websocket)
+            
+            # Save assistant response to history
+            chat_history.append({"role": "assistant", "content": response})
+
             await websocket.send_json({
                 "type": "done",
                 "content": response
