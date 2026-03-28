@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -29,7 +30,10 @@ load_dotenv()
 
 # Configuration
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+if not OLLAMA_HOST.startswith("http"):
+    OLLAMA_HOST = f"http://{OLLAMA_HOST}"
+OLLAMA_HOST = OLLAMA_HOST.rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 PIPER_MODEL = os.getenv("PIPER_MODEL", "en_US-amy-medium.onnx")
 PIPER_MODEL_DIR = os.getenv("PIPER_MODEL_DIR", "")
 AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
@@ -61,7 +65,16 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Pre-load models on startup."""
+    # Load Whisper in the background
+    asyncio.create_task(load_whisper_model())
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 async def load_whisper_model():
@@ -70,7 +83,7 @@ async def load_whisper_model():
     if whisper_model is None:
         # Use small model for speed, can change to medium/large for quality
         print("Loading Whisper model...")
-        whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
+        whisper_model = WhisperModel("medium.en", device="cpu", compute_type="int8")
         print("Whisper model loaded")
     return whisper_model
 
@@ -118,6 +131,7 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
 
     try:
         async with aiohttp.ClientSession() as session:
+            print(f"[Ollama] Posting {payload} \nto {url}...")
             async with session.post(url, json=payload) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
@@ -169,9 +183,11 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
 
 
                         except json.JSONDecodeError:
+                            print(f"[Ollama] Non-JSON line: {line}")
                             continue
 
                 # Generate final TTS for remaining text
+                print(f"[Ollama] Stream ended, generating final TTS for remaining text...")
                 if pending_text.strip():
                     print(f"[TTS] Generating final audio for: {pending_text.strip()}")
                     audio = await text_to_speech(pending_text)
@@ -750,13 +766,6 @@ async def get_index():
                 };
 
                 micStopBtn.onclick = () => {
-                    if (animationId) {
-                        cancelAnimationFrame(animationId);
-                        animationId = null;
-                    }
-                    if (visualizer) {
-                        visualizer.style.display = 'none';
-                    }
                     if (processor) {
                         processor.disconnect();
                         processor = null;
