@@ -64,6 +64,38 @@ ollama serve &
 python server.py
 ```
 
+## Clients
+
+### 1. Web Client (Node.js)
+A modern, responsive web interface located in `client-node/`.
+- **Chat UI**: Traditional message feed for transcripts and AI responses.
+- **Waveform Visualizer**: Real-time visualization of microphone input.
+- **Low Latency**: Uses `AudioWorkletNode` for high-performance audio capture.
+- **Setup**: 
+  ```bash
+  cd client-node
+  npm install
+  node server.js
+  ```
+  Visit `http://localhost:3000` to use.
+
+### 2. ESP32 Client (Arduino)
+A standalone hardware client located in `client_esp32/`.
+- **Streaming**: Streams I2S microphone data directly to the server.
+- **Playback**: Plays backend-synthesized speech via an I2S DAC/Speaker.
+- **Display**: Supports status and transcript display on compatible screens.
+- **Setup**: 
+  - Open `client_esp32/client_esp32.ino` in Arduino IDE.
+  - Install `ArduinoWebsockets` library.
+  - Update `WIFI_SSID`, `WIFI_PASS`, and `SERVER_IP` in the sketch.
+  - Flash to your ESP32 board.
+
+### 3. Minimal Ping Tester
+A simple CLI tool to verify connectivity:
+```bash
+python test_ping.py [SERVER_IP] 8080
+```
+
 ## Configuration
 
 Edit `.env` to configure:

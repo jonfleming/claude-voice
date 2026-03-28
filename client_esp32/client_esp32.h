@@ -1,0 +1,16 @@
+void request_showBootInstructions(const char *text);
+void request_showBootInstructions(const char *text);
+void request_hideBootInstructions();
+void request_clear_lines();
+void request_display_line1(const char *text);
+void request_display_line2(const char *text);
+void stop_recorder_task();
+void start_recorder_task();
+int is_recorder_task_running(void);
+void stop_player_task();
+void start_player_task(void);
+int is_player_task_running(void);
+void handle_button_events();
+void loop_task_play_handle(void *pvParameters);
+void play_backend_audio_base64(const String &audio_b64);
+void handle_claude_ws_json(const String &json);

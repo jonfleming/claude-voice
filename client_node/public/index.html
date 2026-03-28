@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice AI Chat - Pipeline</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar or Header for Controls -->
+        <header class="app-header">
+            <div class="status-indicator">
+                <span id="connStatus" class="dot disconnected"></span>
+                <span id="connText">Disconnected</span>
+            </div>
+            <div class="controls">
+                <button id="connectBtn" class="primary-btn">Connect Server</button>
+                <button id="micBtn" class="mic-btn" disabled>
+                    <span class="icon">🎤</span>
+                    <span id="micBtnText">Start Listening</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Chat Area -->
+        <main class="chat-container">
+            <div id="messageFeed" class="message-feed">
+                <div class="system-message">Connect to the server to begin chatting.</div>
+            </div>
+            
+            <!-- Bottom fixed visualization area -->
+            <div class="input-area">
+                <canvas id="visualizer"></canvas>
+                <div id="statusMsg" class="status-msg"></div>
+            </div>
+        </main>
+        
+        <!-- Hidden Audio Player -->
+        <audio id="audioPlayer" style="display:none"></audio>
+    </div>
+
+    <script src="client.js"></script>
+</body>
+</html>
