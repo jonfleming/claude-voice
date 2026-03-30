@@ -85,6 +85,7 @@ connectBtn.onclick = () => {
 
     // Connect to the Python server (adjust IP if remote)
     ws = new WebSocket('ws://localhost:8080/ws');
+    ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
         connStatus.className = 'dot connected';
@@ -105,6 +106,15 @@ connectBtn.onclick = () => {
     };
 
     ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+            console.log('Received binary audio data, size:', event.data.byteLength);
+            const blob = new Blob([event.data], { type: 'audio/wav' });
+            const url = URL.createObjectURL(blob);
+            audioQueue.push(url);
+            if (!isPlaying) playNextAudio();
+            return;
+        }
+
         try {
             const msg = JSON.parse(event.data);
             
@@ -120,13 +130,8 @@ connectBtn.onclick = () => {
             } else if (msg.type === 'response') {
                 updateAiMessage(msg.content);
             } else if (msg.type === 'audio' && msg.data) {
-                const bytes = atob(msg.data);
-                const arr = new Uint8Array(bytes.length);
-                for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-                const blob = new Blob([arr], { type: 'audio/wav' });
-                const url = URL.createObjectURL(blob);
-                audioQueue.push(url);
-                if (!isPlaying) playNextAudio();
+                // Skip JSON audio if we're using binary
+                console.log('Skipping JSON audio in favor of binary');
             } else if (msg.type === 'error') {
                 addMessage(`Error: ${msg.content}`, 'system');
                 isServerProcessing = false;

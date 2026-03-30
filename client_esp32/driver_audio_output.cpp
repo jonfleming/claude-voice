@@ -6,17 +6,24 @@
 Audio audio;
 I2SClass i2s_output; 
 
+static uint16_t s_bits_per_sample = 32;
+static float s_volume_factor = 0.476f; // Default to ~10/21
+
 bool i2s_output_init(int bclk, int lrc, int dout) {
   i2s_output.setPins(bclk, lrc, dout);
   if (!i2s_output.begin(I2S_MODE_STD, 32000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
     Serial.println("Failed to initialize I2S output bus!");
     return false;
   }
+  s_bits_per_sample = 32;
   return true;
 }
 
 void i2s_output_wav(uint8_t *data, size_t len)
 {
+  size_t data_offset = 0;
+  size_t data_size = 0;
+
   // Inspect WAV header (if present) and reconfigure I2S to match sample rate / bit depth / channels
   // Use a robust chunk-based parser to handle non-standard fmt chunk sizes.
   if (len >= 12 && data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' && data[8] == 'W' && data[9] == 'A' && data[10] == 'V' && data[11] == 'E') {
@@ -30,24 +37,29 @@ void i2s_output_wav(uint8_t *data, size_t len)
       // read chunk id and size
       const char *cid = (const char *)(data + offset);
       uint32_t csize = (uint32_t)data[offset+4] | ((uint32_t)data[offset+5] << 8) | ((uint32_t)data[offset+6] << 16) | ((uint32_t)data[offset+7] << 24);
-      size_t chunk_data = offset + 8;
-      if (chunk_data + csize > len) break; // not enough data available
+      size_t chunk_data_offset = offset + 8;
+      if (chunk_data_offset + csize > len) break; // not enough data available
 
       if (cid[0]=='f' && cid[1]=='m' && cid[2]=='t' && cid[3]==' ') {
         // fmt chunk: parse common fields if present
         if (csize >= 16) {
-          channels = (uint16_t)data[chunk_data+2] | ((uint16_t)data[chunk_data+3] << 8);
-          sample_rate = (uint32_t)data[chunk_data+4] | ((uint32_t)data[chunk_data+5] << 8) | ((uint32_t)data[chunk_data+6] << 16) | ((uint32_t)data[chunk_data+7] << 24);
-          bits_per_sample = (uint16_t)data[chunk_data+14] | ((uint16_t)data[chunk_data+15] << 8);
+          channels = (uint16_t)data[chunk_data_offset+2] | ((uint16_t)data[chunk_data_offset+3] << 8);
+          sample_rate = (uint32_t)data[chunk_data_offset+4] | ((uint32_t)data[chunk_data_offset+5] << 8) | ((uint32_t)data[chunk_data_offset+6] << 16) | ((uint32_t)data[chunk_data_offset+7] << 24);
+          bits_per_sample = (uint16_t)data[chunk_data_offset+14] | ((uint16_t)data[chunk_data_offset+15] << 8);
         }
+      } else if (cid[0]=='d' && cid[1]=='a' && cid[2]=='t' && cid[3]=='a') {
+        data_offset = chunk_data_offset;
+        data_size = csize;
       }
 
-      offset = chunk_data + csize;
+      offset = chunk_data_offset + csize;
       // chunk sizes are word-aligned to even bytes
       if (csize & 1) offset++;
     }
 
-    Serial.printf("WAV header (parsed): sample_rate=%u, channels=%u, bits_per_sample=%u\r\n", sample_rate, channels, bits_per_sample);
+    Serial.printf("WAV header (parsed): sample_rate=%u, channels=%u, bits_per_sample=%u, data_offset=%u\r\n", sample_rate, channels, bits_per_sample, (unsigned)data_offset);
+
+    s_bits_per_sample = bits_per_sample;
 
     // Choose data bit width enum
     i2s_data_bit_width_t data_bit_width = I2S_DATA_BIT_WIDTH_32BIT;
@@ -67,6 +79,25 @@ void i2s_output_wav(uint8_t *data, size_t len)
       Serial.println("Failed to reinitialize I2S output with WAV parameters, falling back to default.");
       // attempt to reinit with default settings
       i2s_output.begin(I2S_MODE_STD, 32000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH);
+      s_bits_per_sample = 32;
+    }
+  }
+
+  // Scale data before playing if volume < 1.0
+  // IMPORTANT: Only scale the actual audio data, not the header!
+  if (s_volume_factor < 0.99f && data_offset > 0 && data_size > 0) {
+    if (s_bits_per_sample == 16) {
+      int16_t *samples = (int16_t *)(data + data_offset);
+      size_t num_samples = data_size / 2;
+      for (size_t i = 0; i < num_samples; i++) {
+        samples[i] = (int16_t)(samples[i] * s_volume_factor);
+      }
+    } else if (s_bits_per_sample == 32) {
+      int32_t *samples = (int32_t *)(data + data_offset);
+      size_t num_samples = data_size / 4;
+      for (size_t i = 0; i < num_samples; i++) {
+        samples[i] = (int32_t)(samples[i] * s_volume_factor);
+      }
     }
   }
 
@@ -77,6 +108,8 @@ void i2s_output_wav(uint8_t *data, size_t len)
 bool i2s_output_stream_begin(uint32_t sample_rate, uint16_t bits_per_sample, uint16_t channels) {
   // End any previous I2S to allow reconfiguration
   i2s_output.end();
+
+  s_bits_per_sample = bits_per_sample;
 
   i2s_data_bit_width_t data_bit_width = I2S_DATA_BIT_WIDTH_32BIT;
   if (bits_per_sample <= 16) data_bit_width = I2S_DATA_BIT_WIDTH_16BIT;
@@ -95,16 +128,31 @@ bool i2s_output_stream_begin(uint32_t sample_rate, uint16_t bits_per_sample, uin
 
 // Write PCM bytes to I2S output. Returns number of bytes written (best-effort).
 size_t i2s_output_stream_write(const uint8_t *data, size_t len) {
-  // Use I2SClass write method if available; this should stream PCM directly out.
-  // The API below is a common signature for ESP_I2S variants; if your board
-  // library uses a different name, adjust accordingly.
   size_t written = 0;
   if (len == 0) return 0;
-  // `I2SClass::write` expects a non-const `uint8_t*` buffer. Cast away const
-  // here because the I2S write will not modify the provided buffer.
+
+  // Scale data before writing if volume < 1.0
+  if (s_volume_factor < 0.99f) {
+    // For streaming, we modify a copy if we can, or carefully mutate if known to be safe.
+    // In our case, the caller (WebSocket handler) provides a temporary buffer.
+    if (s_bits_per_sample == 16) {
+      int16_t *samples = (int16_t *)data; // Casting away const! Use with caution.
+      for (size_t i = 0; i < len / 2; i++) {
+        samples[i] = (int16_t)(samples[i] * s_volume_factor);
+      }
+    } else if (s_bits_per_sample == 32) {
+      int32_t *samples = (int32_t *)data;
+      for (size_t i = 0; i < len / 4; i++) {
+        samples[i] = (int32_t)(samples[i] * s_volume_factor);
+      }
+    }
+  }
+
+  // `I2SClass::write` expects a non-const `uint8_t*` buffer.
   written = (size_t)i2s_output.write((uint8_t *)data, (size_t)len);
   return written;
 }
+
 
 void i2s_output_stream_end(void) {
   // Gracefully stop I2S streaming; don't deinit completely so caller can
@@ -126,6 +174,9 @@ int audio_output_init(int bclk, int lrc, int dout) {
 
 //Set the volume: 0-21
 void audio_output_set_volume(int volume) {
+  if (volume < 0) volume = 0;
+  if (volume > 21) volume = 21;
+  s_volume_factor = (float)volume / 21.0f;
   audio.setVolume(volume);
 }
 

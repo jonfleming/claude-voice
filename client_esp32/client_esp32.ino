@@ -215,20 +215,23 @@ void handle_claude_ws_json(const String &json) {
     }
   } else if (type == "response") {
     String token = extract_json_string_value(json, "content");
-    token.trim();
+    // Do NOT trim token here; Ollama often sends tokens with leading/trailing spaces
     if (token.length() > 0) {
       Serial.print(token);
       request_display_line2(token.c_str());
     }
   } else if (type == "audio") {
-    String audio_b64 = extract_json_string_value(json, "data");
-    if (audio_b64.length() > 0) {
-      Serial.println("\n[WS] Playing backend audio response...");
-      request_display_line2("Speaking...");
-      play_backend_audio_base64(audio_b64);
-      request_display_line1("Ready to listen.");
-      request_display_line2("");
-    }
+    // We now prefer raw binary audio frames (handled in on_message) for efficiency.
+    // Skip JSON-encoded audio to avoid double-playing.
+    Serial.println("[WS] Skipping JSON audio message (preferring binary)");
+  } else if (type == "transcribing") {
+    Serial.println("[WS] Transcribing...");
+    request_display_line1("Transcribing...");
+    request_display_line2("");
+  } else if (type == "done") {
+    Serial.println("\n[WS] Response complete.");
+    request_display_line1("Ready to listen.");
+    request_display_line2("");
   } else if (type == "error") {
     String err = extract_json_string_value(json, "content");
     Serial.printf("[WS] Backend error: %s\n", err.c_str());
@@ -247,10 +250,22 @@ void claude_ws_on_message(WebsocketsMessage message) {
     if (!payload.empty()) {
       Serial.printf("[WS] Received binary audio payload: %u bytes\n", (unsigned)payload.size());
       player_task_handle = (TaskHandle_t)1;
-      if (i2s_output_stream_begin(16000, 16, 1)) {
-        i2s_output_stream_write((const uint8_t *)payload.data(), payload.size());
-        delay(20);
-        i2s_output_stream_end();
+      
+      const uint8_t *data = (const uint8_t *)payload.data();
+      size_t len = payload.size();
+
+      bool is_wav = len >= 12 &&
+        data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' &&
+        data[8] == 'W' && data[9] == 'A' && data[10] == 'V' && data[11] == 'E';
+
+      if (is_wav) {
+        i2s_output_wav((uint8_t *)data, len);
+      } else {
+        if (i2s_output_stream_begin(16000, 16, 1)) {
+          i2s_output_stream_write(data, len);
+          delay(20);
+          i2s_output_stream_end();
+        }
       }
       player_task_handle = NULL;
     }
@@ -375,6 +390,8 @@ void setup() {
   audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
   // Initialize the I2S bus for audio output
   i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT);
+  // Set default volume to ~half (range 0-21)
+  audio_output_set_volume(10);
 
   // Create mutex for display buffer protection
   display_mutex = xSemaphoreCreateMutex();
@@ -664,32 +681,54 @@ void write_wav_header_to_client(WiFiClient &client, uint32_t data_bytes) {
   client.write((const uint8_t *)&subchunk2_size, 4);
 }
 
-// Simple JSON value extractor for top-level string fields (naive, but fine for small predictable responses)
+// Simple JSON value extractor for top-level string fields
 String extract_json_string_value(const String &json, const String &key) {
   String needle = String("\"") + key + String("\"") + String(":");
   int idx = json.indexOf(needle);
   if (idx < 0) return String("");
+  
   // move to first quote after ':'
   int q = json.indexOf('"', idx + needle.length());
   if (q < 0) return String("");
-  int q2 = q + 1;
+  int q_start = q + 1;
+  
+  // Find the end quote, taking escapes into account
+  int q_end = -1;
+  int curr = q_start;
+  while (curr < json.length()) {
+    if (json[curr] == '\\') {
+      curr += 2; // skip escape and the escaped char
+      continue;
+    }
+    if (json[curr] == '"') {
+      q_end = curr;
+      break;
+    }
+    curr++;
+  }
+  
+  if (q_end == -1) return String("");
+  
+  String raw = json.substring(q_start, q_end);
+  // Now handle escapes if any
+  if (raw.indexOf('\\') == -1) return raw; // common case, no escapes
+  
   String out = "";
-  while (q2 < json.length()) {
-    char c = json[q2];
-    if (c == '"') break;
-    // handle basic escapes
-    if (c == '\\' && q2 + 1 < json.length()) {
-      char esc = json[q2 + 1];
+  out.reserve(raw.length());
+  for (size_t i = 0; i < raw.length(); ++i) {
+    char c = raw[i];
+    if (c == '\\' && i + 1 < raw.length()) {
+      char esc = raw[i + 1];
       if (esc == '"') out += '"';
       else if (esc == 'n') out += '\n';
       else if (esc == 'r') out += '\r';
       else if (esc == 't') out += '\t';
-      else out += esc;
-      q2 += 2;
-      continue;
+      else if (esc == '/') out += '/';
+      else if (esc == '\\') out += '\\';
+      i++;
+    } else {
+      out += c;
     }
-    out += c;
-    q2++;
   }
   return out;
 }
@@ -705,25 +744,47 @@ String extract_all_json_string_values(const String &json, const String &key) {
     // move to first quote after ':'
     int q = json.indexOf('"', idx + needle.length());
     if (q < 0) break;
-    int q2 = q + 1;
-    while (q2 < json.length()) {
-      char c = json[q2];
-      if (c == '"') break;
-      if (c == '\\' && q2 + 1 < json.length()) {
-        char esc = json[q2 + 1];
-        if (esc == '"') out += '"';
-        else if (esc == 'n') out += '\n';
-        else if (esc == 'r') out += '\r';
-        else if (esc == 't') out += '\t';
-        else out += esc;
-        q2 += 2;
-        continue;
-      }
-      out += c;
-      q2++;
+    int q_start = q + 1;
+    
+    int q_end = -1;
+    int curr = q_start;
+    while (curr < json.length()) {
+        if (json[curr] == '\\') {
+            curr += 2;
+            continue;
+        }
+        if (json[curr] == '"') {
+            q_end = curr;
+            break;
+        }
+        curr++;
     }
+    if (q_end == -1) break;
+    
+    String val = json.substring(q_start, q_end);
+    // basic unescape
+    if (val.indexOf('\\') != -1) {
+        String unesc = "";
+        unesc.reserve(val.length());
+        for(size_t i=0; i<val.length(); i++) {
+            if (val[i] == '\\' && i+1 < val.length()) {
+                char esc = val[i+1];
+                if (esc == '"') unesc += '"';
+                else if (esc == 'n') unesc += '\n';
+                else if (esc == '/') unesc += '/';
+                else if (esc == '\\') unesc += '\\';
+                i++;
+            } else {
+                unesc += val[i];
+            }
+        }
+        out += unesc;
+    } else {
+        out += val;
+    }
+    
     // advance search position
-    start = q2 + 1;
+    start = q_end + 1;
   }
   return out;
 }

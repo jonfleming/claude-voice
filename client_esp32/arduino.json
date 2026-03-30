@@ -1,0 +1,6 @@
+{
+    "sketch": "client_esp32.ino",
+    "board": "esp32:esp32:esp32s3",
+    "output": "build",
+    "port": "/dev/ttyACM0"
+}

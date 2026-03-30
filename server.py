@@ -34,7 +34,7 @@ if not OLLAMA_HOST.startswith("http"):
     OLLAMA_HOST = f"http://{OLLAMA_HOST}"
 OLLAMA_HOST = OLLAMA_HOST.rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-PIPER_MODEL = os.getenv("PIPER_MODEL", "en_US-amy-medium.onnx")
+PIPER_MODEL = os.getenv("PIPER_MODEL", "en_US-libritts_r-medium.onnx")
 PIPER_MODEL_DIR = os.getenv("PIPER_MODEL_DIR", "")
 AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
 VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "1.5"))
@@ -175,6 +175,9 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                                         print(f"[TTS] Generating audio for: {text_segment.strip()}")
                                         audio = await text_to_speech(text_segment)
                                         if audio:
+                                            # Send as raw binary frame for ESP32 efficiency
+                                            await websocket.send_bytes(audio)
+                                            # Also send JSON for web clients that might not handle binary well
                                             audio_b64 = base64.b64encode(audio).decode()
                                             await websocket.send_json({
                                                 "type": "audio",
@@ -192,6 +195,9 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                     print(f"[TTS] Generating final audio for: {pending_text.strip()}")
                     audio = await text_to_speech(pending_text)
                     if audio:
+                        # Send as raw binary frame
+                        await websocket.send_bytes(audio)
+                        # Also send JSON
                         audio_b64 = base64.b64encode(audio).decode()
                         await websocket.send_json({
                             "type": "audio",
@@ -264,27 +270,24 @@ class AudioBuffer:
         self.last_audio_time: Optional[float] = None
         self.speech_start_time: Optional[float] = None
         self.silent_duration: float = 0.0
+        # Internal buffer for VAD windowing (ensures stable RMS on small chunks)
+        self.vad_window_buffer = b""
+        self.min_vad_window_bytes = int(self.sample_rate * 0.1 * 2) # 100ms
 
     def add(self, chunk: bytes, current_time: float):
         """Add audio chunk to buffer and update VAD state."""
         self.buffer.append(chunk)
+        self.vad_window_buffer += chunk
         self.last_audio_time = current_time
 
-        # Process in windows of 100ms for more accurate VAD
-        window_size_bytes = int(self.sample_rate * 0.1 * 2) # 100ms window (16-bit mono)
-        
-        if len(chunk) <= window_size_bytes:
-            rms = get_rms(chunk)
-            duration = len(chunk) / (2 * self.sample_rate)
+        # Only process VAD when we have a full window
+        while len(self.vad_window_buffer) >= self.min_vad_window_bytes:
+            window = self.vad_window_buffer[:self.min_vad_window_bytes]
+            self.vad_window_buffer = self.vad_window_buffer[self.min_vad_window_bytes:]
+            
+            rms = get_rms(window)
+            duration = len(window) / (2 * self.sample_rate)
             self._update_vad(rms, duration, current_time)
-        else:
-            # Split into windows
-            for i in range(0, len(chunk), window_size_bytes):
-                window = chunk[i:i+window_size_bytes]
-                if not window: continue
-                rms = get_rms(window)
-                duration = len(window) / (2 * self.sample_rate)
-                self._update_vad(rms, duration, current_time)
 
     def _update_vad(self, rms: float, duration: float, current_time: float):
         """Internal VAD state update."""
@@ -293,6 +296,7 @@ class AudioBuffer:
         else:
             # Speech detected
             if self.speech_start_time is None:
+                print(f"[VAD] Speech detected (RMS: {rms:.4f})")
                 self.speech_start_time = current_time
             self.silent_duration = 0.0
 
@@ -308,6 +312,7 @@ class AudioBuffer:
     def clear(self):
         """Clear the buffer."""
         self.buffer = []
+        self.vad_window_buffer = b""
         self.speech_start_time = None
         self.silent_duration = 0.0
 
@@ -341,18 +346,21 @@ async def handle_websocket(websocket: WebSocket):
     chat_history: list[dict] = []
 
 
-    async def trigger_transcription():
+    async def trigger_transcription(force=False):
         """Helper to trigger transcription and LLM response."""
-        if not audio_buffer.speech_start_time:
-            audio_buffer.clear()
+        # If not forced, we need to have detected some speech first
+        if not force and not audio_buffer.speech_start_time:
+            # Don't clear if it was just silence, let it accumulate
+            # unless it's way too long (handled in check_vad)
             return
 
         audio_data = audio_buffer.get_audio()
-        audio_buffer.clear() # Clear immediately to avoid double triggers
-        
         if not audio_data:
             return
 
+        # Clear immediately to avoid double triggers
+        audio_buffer.clear()
+        
         print(f"[VAD] Triggering transcription ({len(audio_data)} bytes)")
         await websocket.send_json({"type": "transcribing", "content": ""})
         text = await transcribe_audio(audio_data)
@@ -393,6 +401,9 @@ async def handle_websocket(websocket: WebSocket):
                     await trigger_transcription()
                 continue
 
+            if data.get("type") == "websocket.disconnect":
+                raise WebSocketDisconnect(code=data.get("code", 1000))
+
             if "text" in data:
                 # Text message (control message)
                 try:
@@ -405,10 +416,10 @@ async def handle_websocket(websocket: WebSocket):
                 if msg_type == "ping":
                     await websocket.send_json({"type": "pong"})
                 elif msg_type == "transcribe":
-                    await trigger_transcription()
+                    await trigger_transcription(force=True)
                 elif msg_type == "stream":
                     # Force process current buffer
-                    await trigger_transcription()
+                    await trigger_transcription(force=True)
 
             elif "bytes" in data:
                 # Audio data
@@ -579,6 +590,7 @@ async def get_index():
                     }
 
                     ws = new WebSocket('ws://' + location.host + '/ws');
+                    ws.binaryType = 'arraybuffer';
 
                     ws.onopen = () => {
                         status.textContent = 'Connected';
@@ -606,8 +618,14 @@ async def get_index():
                     };
 
                     ws.onmessage = (event) => {
-                        if (event.data instanceof Blob) {
-                            // Raw blob handling (if any)
+                        if (event.data instanceof ArrayBuffer) {
+                            console.log('Received binary audio data, size:', event.data.byteLength);
+                            const blob = new Blob([event.data], { type: 'audio/wav' });
+                            const url = URL.createObjectURL(blob);
+                            audioQueue.push(url);
+                            if (!isPlaying) {
+                                playNextAudio();
+                            }
                         } else {
                             try {
                                 const msg = JSON.parse(event.data);
@@ -625,16 +643,12 @@ async def get_index():
                                     addLog('[Error] ' + msg.content);
                                     isServerProcessing = false;
                                 } else if (msg.type === 'audio' && msg.data) {
-                                    console.log('Received audio data, length:', msg.data.length);
-                                    const bytes = atob(msg.data);
-                                    const arr = new Uint8Array(bytes.length);
-                                    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-                                    const blob = new Blob([arr], { type: 'audio/wav' });
-                                    const url = URL.createObjectURL(blob);
-                                    audioQueue.push(url);
-                                    if (!isPlaying) {
-                                        playNextAudio();
-                                    }
+                                    // Skip if we already got binary for this segment
+                                    // (Simplification: if we send both, we'll play twice if not careful.
+                                    // However, the ESP32 prefers binary, web can handle both. 
+                                    // To avoid double playback, we only use binary if available.)
+                                    // For now, let's just log and skip JSON audio if it's there
+                                    console.log('Received JSON audio (skipped in favor of binary)');
                                 }
                             } catch (e) {
                                 addLog('[WS] ' + event.data);

@@ -81,9 +81,10 @@ A modern, responsive web interface located in `client-node/`.
 
 ### 2. ESP32 Client (Arduino)
 A standalone hardware client located in `client_esp32/`.
-- **Streaming**: Streams I2S microphone data directly to the server.
-- **Playback**: Plays backend-synthesized speech via an I2S DAC/Speaker.
-- **Display**: Supports status and transcript display on compatible screens.
+- **Streaming**: Streams I2S microphone data (16-bit, 16kHz mono) directly to the server.
+- **Efficient Playback**: Supports raw binary audio frames for low-latency playback via I2S.
+- **Display**: Real-time status ("Transcribing...", "Speaking...") and transcript display.
+- **Volume Control**: Software-based volume scaling for DACs without hardware controls.
 - **Setup**: 
   - Open `client_esp32/client_esp32.ino` in Arduino IDE.
   - Install `ArduinoWebsockets` library.
@@ -107,6 +108,7 @@ Edit `.env` to configure:
 | `PIPER_MODEL` | en_US-lessac-medium.onnx | Piper TTS model |
 | `AUDIO_SAMPLE_RATE` | 16000 | Audio sample rate |
 | `VAD_THRESHOLD` | 1.5 | Seconds of silence to trigger STT |
+| `VAD_ENERGY_THRESHOLD` | 0.01 | RMS energy threshold for VAD |
 | `WS_PORT` | 8080 | WebSocket server port |
 
 ## WebSocket Protocol
@@ -115,7 +117,7 @@ Connect to `ws://localhost:8080/ws`
 
 ### Client → Server
 
-**Audio data**: Send raw PCM audio bytes (16-bit, 16kHz mono)
+**Audio data**: Send raw PCM audio bytes (16-bit, 16kHz mono) as binary frames.
 
 **JSON messages**:
 ```json
@@ -125,11 +127,15 @@ Connect to `ws://localhost:8080/ws`
 
 ### Server → Client
 
+**Binary frames**: Raw PCM audio data (16-bit, 16kHz mono) or WAV data for immediate playback.
+
 **JSON messages**:
 ```json
+{"type": "transcribing", "content": ""} // Server started Whisper processing
 {"type": "text", "content": "Transcribed text..."}
 {"type": "response", "content": "LLM response token..."}
-{"type": "audio", "data": "<base64 audio>"}
+{"type": "audio", "data": "<base64 audio>"} // Legacy support
+{"type": "done", "content": "Final response"} // Response stream complete
 {"type": "error", "content": "Error message"}
 {"type": "pong"}
 ```

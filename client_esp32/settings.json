@@ -1,0 +1,7 @@
+{
+    "arduino.path": "/usr/bin",
+    "arduino.commandPath": "arduino-cli",
+    "arduino.useArduinoCli": true,
+    "arduino.analyzeOnOpen": true,
+    "arduino.logLevel": "info"
+}
