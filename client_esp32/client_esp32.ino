@@ -254,11 +254,12 @@ void handle_claude_ws_json(const String &json) {
     request_display_line1("Transcribing...");
     request_display_line2("");
   } else if (type == "done") {
-    button_abort = false;
-    Serial.println("\n[WS] Response complete.");
-    request_display_line1("Resume recording...");
-    request_display_line2("");
-    start_recorder_task();
+    if (!button_abort) {
+      Serial.println("\n[WS] Response complete.");
+      request_display_line1("Resume recording...");
+      request_display_line2("");
+      start_recorder_task();
+    }
   } else if (type == "error") {
     String err = extract_json_string_value(json, "content");
     Serial.printf("[WS] Backend error: %s\n", err.c_str());
@@ -466,6 +467,7 @@ void loop_task_sound_recorder(void *pvParameters) {
     claude_ws_send_transcribe();
   }
 
+  button_abort = false;
   Serial.println("Listening...");
   request_display_line1("Listening...");
   request_display_line2("");
