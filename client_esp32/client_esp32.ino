@@ -4,8 +4,8 @@
 * receives the transcribed text, sends it to an AI model for generating a response, and then uses a TTS service
 * to convert the response text back into speech, which is played through an audio output using I2S.
 * 
-* Author: Zhentao Lin
-* Date:   2025-08-07
+* Author: Jon Fleming
+* Date:   2026-03-30
 */
 #include "driver_audio_input.h"
 #include "driver_audio_output.h"
@@ -254,9 +254,11 @@ void handle_claude_ws_json(const String &json) {
     request_display_line1("Transcribing...");
     request_display_line2("");
   } else if (type == "done") {
+    button_abort = false;
     Serial.println("\n[WS] Response complete.");
-    request_display_line1("Ready to listen.");
+    request_display_line1("Resume recording...");
     request_display_line2("");
+    start_recorder_task();
   } else if (type == "error") {
     String err = extract_json_string_value(json, "content");
     Serial.printf("[WS] Backend error: %s\n", err.c_str());
@@ -271,6 +273,10 @@ void handle_claude_ws_json(const String &json) {
 
 void claude_ws_on_message(WebsocketsMessage message) {
   if (message.isBinary()) {
+    if(button_abort) {
+      Serial.println("[WS] Received audio payload but button abort is active; ignoring.");
+      return;
+    }
     std::string payload = message.rawData();
     if (!payload.empty()) {
       Serial.printf("[WS] Received binary audio payload: %u bytes\n", (unsigned)payload.size());
@@ -555,9 +561,11 @@ void handle_button_events() {
         stop_player_task();
         i2s_output_stream_end();
       }
+      button_abort = true; // Signal to stop any ongoing recording/playback
       request_showBootInstructions("Press button to start a conversation.");
     } else {
       // Start a new conversation
+      button_abort = false;
       Serial.println("[Button] Starting continuous listening...");
       request_hideBootInstructions();
       start_recorder_task();
