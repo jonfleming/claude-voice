@@ -4,11 +4,12 @@ static I2SClass i2s_input;
 
 void audio_input_init(uint8_t sck, uint8_t ws, uint8_t din) {
     i2s_input.setPins(sck, ws, -1, din);
-    if (!i2s_input.begin(I2S_MODE_STD, 32000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
+    // Use 16kHz directly to match backend and avoid downsampling artifacts
+    if (!i2s_input.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
         Serial.println("Failed to initialize I2S bus!");
         return;
     }
-    Serial.println("I2S bus initialized.");
+    Serial.println("I2S bus initialized at 16kHz.");
 }
 
 void audio_input_deinit(void)

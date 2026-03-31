@@ -129,21 +129,43 @@ void request_display_line2(const char *text) {
   if (display_mutex) xSemaphoreGive(display_mutex);
 }
 
-// Convert I2S input frames (32-bit stereo, 32kHz) to backend format
-// (16-bit mono, 16kHz) by taking left channel and downsampling by 2.
+// Convert I2S input frames (32-bit stereo, 16kHz) to backend format
+// (16-bit mono, 16kHz). This version adds robust DC removal and 
+// higher software gain to significantly improve Whisper accuracy.
 size_t convert_input_to_backend_pcm(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_cap) {
-  if (!in || !out || in_len < 16) return 0;
+  if (!in || !out || in_len < 8) return 0;
+  
   const int32_t *samples = (const int32_t *)in;
-  size_t stereo_pairs = in_len / (sizeof(int32_t) * 2);
-  size_t out_samples = stereo_pairs / 2;
+  size_t stereo_pairs = in_len / 8; // 2 channels * 4 bytes
+  size_t out_samples = stereo_pairs;
+  
   if (out_samples * sizeof(int16_t) > out_cap) {
     out_samples = out_cap / sizeof(int16_t);
   }
 
+  // DC removal and Gain settings
+  static float dc_offset = 0;
+  const float alpha = 0.999f;
+  const float gain = 12.0f; // ~22dB software gain for better accuracy
+
+  int16_t *out16 = (int16_t *)out;
+
   for (size_t i = 0; i < out_samples; ++i) {
-    int32_t left = samples[(i * 2) * 2];
-    int16_t down = (int16_t)(left >> 16);
-    ((int16_t *)out)[i] = down;
+    // Sum L and R channels (handles mics on either channel)
+    int32_t raw_sample = samples[i * 2] + samples[i * 2 + 1];
+    
+    // 1. Remove DC offset (High-pass filter)
+    dc_offset = (alpha * dc_offset) + ((1.0f - alpha) * (float)raw_sample);
+    float filtered = (float)raw_sample - dc_offset;
+    
+    // 2. Apply Gain and scale from 32-bit to 16-bit
+    float amplified = (filtered * gain) / 65536.0f;
+    
+    // 3. Clamp and store
+    if (amplified > 32767.0f) amplified = 32767.0f;
+    else if (amplified < -32768.0f) amplified = -32768.0f;
+    
+    out16[i] = (int16_t)amplified;
   }
   return out_samples * sizeof(int16_t);
 }
@@ -393,6 +415,9 @@ void setup() {
   // Set default volume to ~half (range 0-21)
   audio_output_set_volume(10);
 
+  // Create button handler task
+  xTaskCreate(loop_task_button_handler, "button_handler", 4096, NULL, 2, NULL);
+
   // Create mutex for display buffer protection
   display_mutex = xSemaphoreCreateMutex();
   if (!display_mutex) {
@@ -516,21 +541,34 @@ void stop_recorder_task(void) {
 void handle_button_events() {
   int button_state = button.get_button_state();
   if (button_state == Button::KEY_STATE_PRESSED && last_button_state_for_toggle != Button::KEY_STATE_PRESSED) {
-    if (recorder_task_handle == NULL) {
-      Serial.println("[Button] Starting continuous listening...");
-      request_hideBootInstructions();
-      start_recorder_task();
-    } else {
-      Serial.println("[Button] Stopping listening...");
-      stop_recorder_task();
+    // If either recorder or player is running, stop them
+    if (recorder_task_handle != NULL || player_task_handle != NULL) {
+      if (recorder_task_handle != NULL) {
+        Serial.println("[Button] Stopping listening...");
+        stop_recorder_task();
+      }
       if (player_task_handle != NULL) {
+        Serial.println("[Button] Stopping playback...");
         stop_player_task();
         i2s_output_stream_end();
       }
-      request_showBootInstructions("Press button to start listening.");
+      request_showBootInstructions("Press button to start a conversation.");
+    } else {
+      // Start a new conversation
+      Serial.println("[Button] Starting continuous listening...");
+      request_hideBootInstructions();
+      start_recorder_task();
     }
   }
   last_button_state_for_toggle = button_state;
+}
+
+void loop_task_button_handler(void *pvParameters) {
+  while (1) {
+    button.key_scan();
+    handle_button_events();
+    vTaskDelay(20 / portTICK_PERIOD_MS);
+  }
 }
 
 // Main loop function that runs continuously
@@ -572,10 +610,6 @@ void loop() {
     display.clearLines();
   }
   display.routine(); 
-  // Scan the button state
-  button.key_scan();
-  // Handle button events
-  handle_button_events();
   // Keep websocket alive and process backend messages.
   claude_ws_poll();
   // Light reconnect policy while idle.
@@ -824,11 +858,14 @@ void start_player_task(void) {
 void stop_player_task(void) {
   // Request player task to stop by notifying it
   if (player_task_handle != NULL) {
-    Serial.println("[Player] Signaling loop_task_play_handle to stop...");
+    Serial.println("[Player] Signaling playback to stop...");
     // Clear the handle to signal stop and send notification
     TaskHandle_t temp = player_task_handle;
     player_task_handle = NULL;
-    xTaskNotifyGive(temp);
+    // Only notify if it's a real task handle (not the flag value 1)
+    if (temp != (TaskHandle_t)1) {
+      xTaskNotifyGive(temp);
+    }
   } else {
       Serial.println("[Player] Player task not running");
   }
