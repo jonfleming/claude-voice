@@ -246,6 +246,9 @@ void handle_claude_ws_json(const String &json) {
     // We now prefer raw binary audio frames (handled in on_message) for efficiency.
     // Skip JSON-encoded audio to avoid double-playing.
     Serial.println("[WS] Skipping JSON audio message (preferring binary)");
+  } else if (type == "stop_recording") {
+    Serial.println("[WS] Server requested stop recording (VAD)");
+    stop_recorder_task();
   } else if (type == "transcribing") {
     Serial.println("[WS] Transcribing...");
     request_display_line1("Transcribing...");
@@ -445,8 +448,8 @@ void loop_task_sound_recorder(void *pvParameters) {
   Serial.println("[Recorder] loop_task_sound_recorder start...");
   bool stop_requested = false;
 
-  uint8_t input_chunk[512];
-  uint8_t backend_chunk[256];
+  uint8_t input_chunk[1024];  // Increased for efficiency (32ms @ 16kHz Stereo 32-bit)
+  uint8_t backend_chunk[512]; // 1024 bytes @ 32-bit stereo -> 512 bytes @ 16-bit mono
 
   if (!claude_ws_connected) {
     claude_ws_connect();
@@ -463,11 +466,9 @@ void loop_task_sound_recorder(void *pvParameters) {
 
   while (!stop_requested && recorder_task_handle != NULL) {
     int iis_buffer_size = audio_input_get_iis_data_available();
-    if (iis_buffer_size == 0) {
-      // Optional: check if I2S is actually working
-      // Serial.println("[Recorder] No I2S data available");
-    }
-    while (iis_buffer_size > 0) {
+    
+    int processed = 0;
+    while (iis_buffer_size > 0 && processed < 4096) {
       if (ulTaskNotifyTake(pdTRUE, 0) > 0 || recorder_task_handle == NULL) {
         Serial.println("[Recorder] Stop requested");
         stop_requested = true;
@@ -475,23 +476,25 @@ void loop_task_sound_recorder(void *pvParameters) {
       }
       
       int real_size = audio_input_read_iis_data((char *)input_chunk, sizeof(input_chunk));
-      if (real_size > 0) {
-        // Mute: Discard audio if player is active
-        if (player_task_handle != NULL) {
-           iis_buffer_size -= real_size;
-           continue; 
-        }
+      if (real_size <= 0) break;
+      
+      // Mute: Discard audio if player is active
+      if (player_task_handle != NULL) {
+         iis_buffer_size -= real_size;
+         processed += real_size;
+         continue; 
+      }
 
-        size_t pcm_size = convert_input_to_backend_pcm(input_chunk, real_size, backend_chunk, sizeof(backend_chunk));
-        if (pcm_size > 0) {
-          if (claude_ws_connected) {
-            claude_ws_send_audio_chunk(backend_chunk, pcm_size);
-          }
+      size_t pcm_size = convert_input_to_backend_pcm(input_chunk, real_size, backend_chunk, sizeof(backend_chunk));
+      if (pcm_size > 0) {
+        if (claude_ws_connected) {
+          claude_ws_send_audio_chunk(backend_chunk, pcm_size);
         }
       }
       iis_buffer_size -= real_size;
+      processed += real_size;
     }
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    vTaskDelay(2 / portTICK_PERIOD_MS);
   }
 
   Serial.println("[Recorder] loop_task_sound_recorder stop...");
