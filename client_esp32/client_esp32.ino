@@ -32,9 +32,9 @@ SemaphoreHandle_t ws_mutex = NULL;
 
 #define RECORDER_FOLDER ""
 // Define the pin number for the button (do not modify)
-#define BUTTON_PIN 19         
+#define BUTTON_PIN 42
 // Define the pin numbers for audio input (do not modify)
-#define AUDIO_INPUT_SCK 3     
+#define AUDIO_INPUT_SCK 3
 #define AUDIO_INPUT_WS 14     
 #define AUDIO_INPUT_DIN 46    
 // Define the pin numbers for audio output (do not modify)

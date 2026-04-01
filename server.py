@@ -37,9 +37,9 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 PIPER_MODEL = os.getenv("PIPER_MODEL", "en_US-libritts_r-medium.onnx")
 PIPER_MODEL_DIR = os.getenv("PIPER_MODEL_DIR", "")
 AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
-VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "1.5"))
+VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "1.0"))
 VAD_MIN_SPEECH = float(os.getenv("VAD_MIN_SPEECH", "0.3"))
-VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.01"))
+VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.161"))
 WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.getenv("WS_PORT", "8080"))
 
@@ -261,7 +261,7 @@ async def text_to_speech(text: str) -> Optional[bytes]:
 class AudioBuffer:
     """Audio buffer with content-aware VAD detection."""
 
-    def __init__(self, vad_threshold: float = 1.5, min_speech: float = 0.3, energy_threshold: float = 0.01, sample_rate: int = 16000):
+    def __init__(self, vad_threshold: float = 1.5, min_speech: float = 0.3, energy_threshold: float = 0.005, sample_rate: int = 16000):
         self.buffer: list[bytes] = []
         self.vad_threshold = vad_threshold
         self.min_speech = min_speech
@@ -269,10 +269,14 @@ class AudioBuffer:
         self.sample_rate = sample_rate
         self.last_audio_time: Optional[float] = None
         self.speech_start_time: Optional[float] = None
-        self.silent_duration: float = 0.0
+        self.silent_duration = 0.0
         # Internal buffer for VAD windowing (ensures stable RMS on small chunks)
         self.vad_window_buffer = b""
         self.min_vad_window_bytes = int(self.sample_rate * 0.1 * 2) # 100ms
+
+# ... (I'll skip to handle_websocket to keep it concise but I MUST provide exact strings)
+# Wait, the mandate says DO NOT use placeholders like '...'. I must provide the full block.
+
 
     def add(self, chunk: bytes, current_time: float):
         """Add audio chunk to buffer and update VAD state."""
@@ -344,50 +348,59 @@ async def handle_websocket(websocket: WebSocket):
 
     audio_buffer = AudioBuffer(VAD_THRESHOLD, VAD_MIN_SPEECH, VAD_ENERGY_THRESHOLD, AUDIO_SAMPLE_RATE)
     chat_history: list[dict] = []
-
+    is_processing = False
+    last_rms_log_time = 0
 
     async def trigger_transcription(force=False):
         """Helper to trigger transcription and LLM response."""
-        # If not forced, we need to have detected some speech first
-        if not force and not audio_buffer.speech_start_time:
-            # Don't clear if it was just silence, let it accumulate
-            # unless it's way too long (handled in check_vad)
+        nonlocal is_processing
+        
+        if is_processing and not force:
             return
 
         audio_data = audio_buffer.get_audio()
         if not audio_data:
             return
 
-        # Clear immediately to avoid double triggers
+        # Transcription Gate: Check if the overall energy is high enough to be real speech
+        total_rms = get_rms(audio_data)
+        if not force and total_rms < VAD_ENERGY_THRESHOLD * 1.2:
+            print(f"[VAD] Ignoring low-energy segment (RMS: {total_rms:.4f})")
+            audio_buffer.clear()
+            return
+
+        is_processing = True
+        if not force:
+            try:
+                await websocket.send_json({"type": "stop_recording"})
+            except:
+                pass
+
         audio_buffer.clear()
-        
-        print(f"[VAD] Triggering transcription ({len(audio_data)} bytes)")
+        print(f"[VAD] Triggering transcription ({len(audio_data)} bytes, RMS: {total_rms:.4f})")
         await websocket.send_json({"type": "transcribing", "content": ""})
-        text = await transcribe_audio(audio_data)
-
-        if text:
-            print(f"[STT] {text}")
-            await websocket.send_json({
-                "type": "text",
-                "content": text
-            })
-
-            # Add to history
-            chat_history.append({"role": "user", "content": text})
-
-            # Send to LLM and get TTS response
-            response = await stream_to_ollama(chat_history, websocket)
+        
+        try:
+            text = await transcribe_audio(audio_data)
             
-            # Save assistant response to history
-            chat_history.append({"role": "assistant", "content": response})
+            # Hallucination Filter: Whisper often hallucinations common phrases on noise
+            hallucinations = ["thank you", "thanks for watching", "bye", "subscrib"]
+            if text and any(h in text.lower() for h in hallucinations) and total_rms < VAD_ENERGY_THRESHOLD * 2.0:
+                print(f"[STT] Filtered hallucination: {text}")
+                text = ""
 
-            await websocket.send_json({
-                "type": "done",
-                "content": response
-            })
-        else:
-            print("[STT] No speech detected")
-            await websocket.send_json({"type": "done", "content": ""})
+            if text:
+                print(f"[STT] {text}")
+                await websocket.send_json({"type": "text", "content": text})
+                chat_history.append({"role": "user", "content": text})
+                response = await stream_to_ollama(chat_history, websocket)
+                chat_history.append({"role": "assistant", "content": response})
+                await websocket.send_json({"type": "done", "content": response})
+            else:
+                print("[STT] No meaningful speech detected")
+                await websocket.send_json({"type": "done", "content": ""})
+        finally:
+            is_processing = False
 
     try:
         while True:
@@ -396,9 +409,10 @@ async def handle_websocket(websocket: WebSocket):
                 data = await asyncio.wait_for(websocket.receive(), timeout=0.5)
             except asyncio.TimeoutError:
                 # Check VAD on timeout (handles case where client stops sending)
-                audio_buffer.add_silence(0.5)
-                if audio_buffer.check_vad():
-                    await trigger_transcription()
+                if not is_processing:
+                    audio_buffer.add_silence(0.5)
+                    if audio_buffer.check_vad():
+                        await trigger_transcription()
                 continue
 
             if data.get("type") == "websocket.disconnect":
@@ -423,9 +437,18 @@ async def handle_websocket(websocket: WebSocket):
 
             elif "bytes" in data:
                 # Audio data
+                if is_processing:
+                    continue # Ignore audio while processing
+
                 audio_chunk = data["bytes"]
                 current_time = asyncio.get_event_loop().time()
                 audio_buffer.add(audio_chunk, current_time)
+
+                # Periodic RMS logging for calibration (every 2 seconds)
+                if current_time - last_rms_log_time > 2.0:
+                    rms = get_rms(audio_chunk)
+                    print(f"[Audio] Current RMS: {rms:.5f} (Threshold: {VAD_ENERGY_THRESHOLD})")
+                    last_rms_log_time = current_time
 
                 # Check VAD after each chunk (handles continuous streaming)
                 if audio_buffer.check_vad():
