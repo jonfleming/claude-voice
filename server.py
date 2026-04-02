@@ -156,7 +156,7 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                                 })
 
                                 # Generate TTS on sentence boundaries or if too long
-                                if (len(pending_text) >= 30 and any(c in pending_text for c in ".!?\n")) or len(pending_text) >= 120:
+                                if (len(pending_text) >= 20 and any(c in pending_text for c in ".!?\n")) or len(pending_text) >= 120:
                                     # Try to split at the last punctuation to keep sentence integrity
                                     last_punct = -1
                                     for i, char in enumerate(reversed(pending_text)):

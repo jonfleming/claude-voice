@@ -104,11 +104,13 @@ Edit `.env` to configure:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OLLAMA_HOST` | http://localhost:11434 | Ollama API endpoint |
-| `OLLAMA_MODEL` | llama3 | Model to use |
-| `PIPER_MODEL` | en_US-lessac-medium.onnx | Piper TTS model |
+| `OLLAMA_MODEL` | llama3.2 | Model to use |
+| `PIPER_MODEL` | en_US-amy-medium.onnx | Piper TTS model |
+| `PIPER_MODEL_DIR` | (none) | Directory containing Piper models |
 | `AUDIO_SAMPLE_RATE` | 16000 | Audio sample rate |
-| `VAD_THRESHOLD` | 1.5 | Seconds of silence to trigger STT |
-| `VAD_ENERGY_THRESHOLD` | 0.01 | RMS energy threshold for VAD |
+| `VAD_THRESHOLD` | 1.0 | Seconds of silence to trigger STT |
+| `VAD_MIN_SPEECH` | 0.3 | Minimum seconds of speech to trigger |
+| `VAD_ENERGY_THRESHOLD` | 0.161 | RMS energy threshold for VAD |
 | `WS_PORT` | 8080 | WebSocket server port |
 
 ## WebSocket Protocol
@@ -134,11 +136,14 @@ Connect to `ws://localhost:8080/ws`
 {"type": "transcribing", "content": ""} // Server started Whisper processing
 {"type": "text", "content": "Transcribed text..."}
 {"type": "response", "content": "LLM response token..."}
-{"type": "audio", "data": "<base64 audio>"} // Legacy support
+{"type": "audio", "data": "<base64 audio>"} // Base64 TTS audio (legacy)
 {"type": "done", "content": "Final response"} // Response stream complete
 {"type": "error", "content": "Error message"}
 {"type": "pong"}
+{"type": "stop_recording"} // Server is processing, client should stop sending audio
 ```
+
+**Binary frames**: Raw PCM audio (16-bit, 16kHz mono) for low-latency playback
 
 ## Testing
 
