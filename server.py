@@ -425,8 +425,17 @@ async def handle_websocket(websocket: WebSocket):
 
     audio_buffer = AudioBuffer(VAD_THRESHOLD, VAD_MIN_SPEECH, VAD_ENERGY_THRESHOLD, AUDIO_SAMPLE_RATE)
     chat_history: list[dict] = []
+    pending_memories: list[str] = []  # Memories from previous turn to include
     is_processing = False
     last_rms_log_time = 0
+
+    async def queue_recall(query: str):
+        """Background task to recall memories for next turn."""
+        memories = await recall_memories_async(query, budget="low")
+        if memories:
+            pending_memories.clear()
+            pending_memories.extend(memories)
+            log(f"[Hindsight] Queued {len(memories)} memories for next turn")
 
     async def trigger_transcription(force=False):
         """Helper to trigger transcription and LLM response."""
@@ -471,20 +480,22 @@ async def handle_websocket(websocket: WebSocket):
                 await websocket.send_json({"type": "text", "content": text})
                 chat_history.append({"role": "user", "content": text})
 
-                # Recall relevant memories from Hindsight
-                memories = await recall_memories_async(text, budget="low")
-                if memories:
-                    context_prompt = "\n".join([f"- {m}" for m in memories])
-                    log(f"[Hindsight] Retrieved {len(memories)} memories")
-                    # Insert system message with context at the beginning
+                # Include any pending memories from previous turn
+                if pending_memories:
+                    context_prompt = "\n".join([f"- {m}" for m in pending_memories])
+                    log(f"[Hindsight] Using {len(pending_memories)} pending memories")
                     system_msg = {"role": "system", "content": f"Relevant past conversations:\n{context_prompt}\n\nYou are a helpful voice assistant."}
                     llm_messages = [system_msg] + chat_history
+                    pending_memories.clear()  # Clear after using
                 else:
                     llm_messages = chat_history
 
                 response = await stream_to_ollama(llm_messages, websocket)
                 chat_history.append({"role": "assistant", "content": response})
                 await websocket.send_json({"type": "done", "content": response})
+
+                # Queue recall for next turn (fire and forget)
+                asyncio.create_task(queue_recall(text))
 
                 # Store conversation in Hindsight
                 memory_content = f"User: {text}\nAssistant: {response}"

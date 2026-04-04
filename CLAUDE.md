@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+See [DESIGN.md](./DESIGN.md) for detailed design decisions and architectural rationale.
+
 ## Project Overview
 
 Voice AI Pipeline - a WebSocket-based service that processes audio end-to-end:
