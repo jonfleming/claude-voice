@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 from faster_whisper import WhisperModel
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from hindsight_client import Hindsight
 
 load_dotenv()
 
@@ -43,13 +44,13 @@ VAD_MIN_SPEECH = float(os.getenv("VAD_MIN_SPEECH", "0.3"))
 VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.005"))
 WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.getenv("WS_PORT", "8080"))
-HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://localhost:8888")
+HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://192.168.48.45:8888")
 HINDSIGHT_BANK = os.getenv("HINDSIGHT_BANK", "default")
 
 # Global models (loaded once)
 whisper_model: Optional[WhisperModel] = None
 piper_process: Optional[asyncio.subprocess.Process] = None
-mcp_client: Optional[aiohttp.ClientSession] = None
+hindsight_client: Optional[Hindsight] = None
 
 
 def log(message: str):
@@ -59,81 +60,66 @@ def log(message: str):
     print(f"[{timestamp}.{millis}] {message}")
 
 
-async def get_mcp_client() -> Optional[aiohttp.ClientSession]:
-    """Get or create MCP client for Hindsight."""
-    global mcp_client
-    print('[MCP] Getting MCP Client')
-    if mcp_client is None:
+def get_hindsight_client() -> Optional[Hindsight]:
+    """Get or create Hindsight client."""
+    global hindsight_client
+    if hindsight_client is None:
         try:
-            mcp_client = aiohttp.ClientSession()
+            hindsight_client = Hindsight(base_url=HINDSIGHT_HOST)
+            log("[Hindsight] Client initialized")
         except Exception as e:
             log(f"[Hindsight] Client creation failed: {e}")
             return None
-    return mcp_client
+    return hindsight_client
 
 
-async def call_mcp_tool(tool_name: str, arguments: dict) -> Optional[dict]:
-    """Call an MCP tool on Hindsight."""
-    log('[MCP] Calling Hindsight MCP ')
-    client = await get_mcp_client()
-    if client is None:
-        return None
-
-    url = f"{HINDSIGHT_HOST}/mcp/{HINDSIGHT_BANK}/"
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": tool_name,
-            "arguments": arguments
-        }
-    }
-
-    try:
-        async with client.post(url, json=payload) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                log(f"[Hindsight] MCP error {resp.status}: {text}")
-                return None
-            result = await resp.json()
-            if "result" in result and "content" in result["result"]:
-                return result["result"]["content"]
-            return None
-    except Exception as e:
-        log(f"[Hindsight] MCP call failed: {e}")
-        return None
-
-
-async def retain_memory(content: str, context: str = "", tags: list = None):
+def retain_memory(content: str, context: str = "", tags: list = None) -> bool:
     """Store a memory in Hindsight."""
     if tags is None:
         tags = ["conversation"]
-    result = await call_mcp_tool("retain", {
-        "content": content,
-        "context": context,
-        "tags": tags
-    })
-    if result:
+    client = get_hindsight_client()
+    if client is None:
+        return False
+    try:
+        client.retain(bank_id=HINDSIGHT_BANK, content=content, context=context, tags=tags)
         log(f"[Hindsight] Memory retained")
-    return result
+        return True
+    except Exception as e:
+        log(f"[Hindsight] Retain failed: {e}")
+        return False
 
 
-async def recall_memories(query: str, limit: int = 5) -> list:
+def recall_memories(query: str, budget: str = "low") -> list:
     """Recall relevant memories from Hindsight."""
-    result = await call_mcp_tool("recall", {
-        "query": query,
-        "limit": limit
-    })
-    if result and isinstance(result, list):
-        memories = []
-        for item in result:
-            if isinstance(item, dict) and "text" in item:
-                memories.append(item["text"])
-            elif isinstance(item, str):
-                memories.append(item)
-        return memories
-    return []
+    client = get_hindsight_client()
+    if client is None:
+        return []
+    try:
+        result = client.recall(bank_id=HINDSIGHT_BANK, query=query, budget=budget)
+        if result and isinstance(result, list):
+            memories = []
+            for item in result:
+                if isinstance(item, dict) and "text" in item:
+                    memories.append(item["text"])
+                elif isinstance(item, str):
+                    memories.append(item)
+            return memories
+        return []
+    except Exception as e:
+        log(f"[Hindsight] Recall failed: {e}")
+        return []
+
+
+async def retain_memory_async(content: str, context: str = "", tags: list = None) -> bool:
+    """Store a memory in Hindsight (async wrapper)."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, retain_memory, content, context, tags)
+
+
+async def recall_memories_async(query: str, budget: str = "low") -> list:
+    """Recall relevant memories from Hindsight (async wrapper)."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, recall_memories, query, budget)
 
 
 class ConnectionManager:
@@ -389,6 +375,7 @@ class AudioBuffer:
             # Speech detected
             if self.speech_start_time is None:
                 log(f"[VAD] Speech detected (RMS: {rms:.4f})")
+                self.speech_start_time = current_time
             self.silent_duration = 0.0
 
     def add_silence(self, duration: float):
@@ -415,14 +402,17 @@ class AudioBuffer:
         # If silence has lasted longer than threshold
         if self.silent_duration >= self.vad_threshold:
             # Check we have enough speech duration to care
-            if self.speech_start_time:
+            if self.speech_start_time is not None and self.last_audio_time is not None:
                 speech_duration = self.last_audio_time - self.speech_start_time
                 if speech_duration >= self.min_speech:
+                    log(f"[VAD] Silent threshold reached, speech duration: {speech_duration:.2f}s")
                     return True
             
             # If we have reached the silence threshold but never detected speech,
             # or speech was too short, clear the buffer to avoid it growing indefinitely.
             if self.silent_duration > self.vad_threshold * 2:
+                if self.speech_start_time is not None:
+                    log("[VAD] Silence threshold reached but speech too short, clearing.")
                 self.clear()
 
         return False
@@ -482,7 +472,7 @@ async def handle_websocket(websocket: WebSocket):
                 chat_history.append({"role": "user", "content": text})
 
                 # Recall relevant memories from Hindsight
-                memories = await recall_memories(text, limit=3)
+                memories = await recall_memories_async(text, budget="low")
                 if memories:
                     context_prompt = "\n".join([f"- {m}" for m in memories])
                     log(f"[Hindsight] Retrieved {len(memories)} memories")
@@ -498,7 +488,7 @@ async def handle_websocket(websocket: WebSocket):
 
                 # Store conversation in Hindsight
                 memory_content = f"User: {text}\nAssistant: {response}"
-                await retain_memory(memory_content, context="voice conversation", tags=["conversation"])
+                await retain_memory_async(memory_content, context="voice conversation", tags=["conversation"])
             else:
                 log("[STT] No meaningful speech detected")
                 await websocket.send_json({"type": "done", "content": ""})
