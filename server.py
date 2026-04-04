@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -39,13 +40,100 @@ PIPER_MODEL_DIR = os.getenv("PIPER_MODEL_DIR", "")
 AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
 VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "1.0"))
 VAD_MIN_SPEECH = float(os.getenv("VAD_MIN_SPEECH", "0.3"))
-VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.161"))
+VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.005"))
 WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.getenv("WS_PORT", "8080"))
+HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://localhost:8888")
+HINDSIGHT_BANK = os.getenv("HINDSIGHT_BANK", "default")
 
 # Global models (loaded once)
 whisper_model: Optional[WhisperModel] = None
 piper_process: Optional[asyncio.subprocess.Process] = None
+mcp_client: Optional[aiohttp.ClientSession] = None
+
+
+def log(message: str):
+    """Print message with timestamp."""
+    timestamp = time.strftime("%H:%M:%S", time.localtime())
+    millis = int((time.time() % 1) * 10)
+    print(f"[{timestamp}.{millis}] {message}")
+
+
+async def get_mcp_client() -> Optional[aiohttp.ClientSession]:
+    """Get or create MCP client for Hindsight."""
+    global mcp_client
+    print('[MCP] Getting MCP Client')
+    if mcp_client is None:
+        try:
+            mcp_client = aiohttp.ClientSession()
+        except Exception as e:
+            log(f"[Hindsight] Client creation failed: {e}")
+            return None
+    return mcp_client
+
+
+async def call_mcp_tool(tool_name: str, arguments: dict) -> Optional[dict]:
+    """Call an MCP tool on Hindsight."""
+    log('[MCP] Calling Hindsight MCP ')
+    client = await get_mcp_client()
+    if client is None:
+        return None
+
+    url = f"{HINDSIGHT_HOST}/mcp/{HINDSIGHT_BANK}/"
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments
+        }
+    }
+
+    try:
+        async with client.post(url, json=payload) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                log(f"[Hindsight] MCP error {resp.status}: {text}")
+                return None
+            result = await resp.json()
+            if "result" in result and "content" in result["result"]:
+                return result["result"]["content"]
+            return None
+    except Exception as e:
+        log(f"[Hindsight] MCP call failed: {e}")
+        return None
+
+
+async def retain_memory(content: str, context: str = "", tags: list = None):
+    """Store a memory in Hindsight."""
+    if tags is None:
+        tags = ["conversation"]
+    result = await call_mcp_tool("retain", {
+        "content": content,
+        "context": context,
+        "tags": tags
+    })
+    if result:
+        log(f"[Hindsight] Memory retained")
+    return result
+
+
+async def recall_memories(query: str, limit: int = 5) -> list:
+    """Recall relevant memories from Hindsight."""
+    result = await call_mcp_tool("recall", {
+        "query": query,
+        "limit": limit
+    })
+    if result and isinstance(result, list):
+        memories = []
+        for item in result:
+            if isinstance(item, dict) and "text" in item:
+                memories.append(item["text"])
+            elif isinstance(item, str):
+                memories.append(item)
+        return memories
+    return []
 
 
 class ConnectionManager:
@@ -117,8 +205,8 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
     """Send message history to Ollama and stream the response with TTS."""
     global piper_process
 
-    print(f"[Ollama] Sending {len(messages)} messages in history")
-    print(f"[Ollama] Last user message: {messages[-1]['content'] if messages else 'N/A'}")
+    log(f"[Ollama] Sending {len(messages)} messages in history")
+    log(f"[Ollama] Last user message: {messages[-1]['content'] if messages else 'N/A'}")
     url = f"{OLLAMA_HOST}/api/chat"
     payload = {
         "model": OLLAMA_MODEL,
@@ -131,14 +219,14 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
 
     try:
         async with aiohttp.ClientSession() as session:
-            print(f"[Ollama] Posting {payload} \nto {url}...")
+            log(f"[Ollama] Posting {payload} \nto {url}...")
             async with session.post(url, json=payload) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
-                    print(f"[Ollama] Error: {resp.status} - {error_text}")
+                    log(f"[Ollama] Error: {resp.status} - {error_text}")
                     raise Exception(f"Ollama error: {error_text}")
 
-                print(f"[Ollama] Connection successful, streaming chat response...")
+                log(f"[Ollama] Connection successful, streaming chat response...")
 
                 async for line in resp.content:
                     if line:
@@ -172,7 +260,7 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                                         pending_text = ""
 
                                     if text_segment.strip():
-                                        print(f"[TTS] Generating audio for: {text_segment.strip()}")
+                                        log(f"[TTS] Generating audio for: {text_segment.strip()}")
                                         audio = await text_to_speech(text_segment)
                                         if audio:
                                             # Send as raw binary frame for ESP32 efficiency
@@ -186,13 +274,13 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
 
 
                         except json.JSONDecodeError:
-                            print(f"[Ollama] Non-JSON line: {line}")
+                            log(f"[Ollama] Non-JSON line: {line}")
                             continue
 
                 # Generate final TTS for remaining text
-                print(f"[Ollama] Stream ended, generating final TTS for remaining text...")
+                log(f"[Ollama] Stream ended, generating final TTS for remaining text...")
                 if pending_text.strip():
-                    print(f"[TTS] Generating final audio for: {pending_text.strip()}")
+                    log(f"[TTS] Generating final audio for: {pending_text.strip()}")
                     audio = await text_to_speech(pending_text)
                     if audio:
                         # Send as raw binary frame
@@ -205,14 +293,14 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                         })
 
     except Exception as e:
-        print(f"[Ollama] Exception: {e}")
+        log(f"[Ollama] Exception: {e}")
         await websocket.send_json({
             "type": "error",
             "content": f"Ollama connection error: {str(e)}"
         })
         raise
 
-    print(f"[Ollama] Stream complete ({len(response_text)} chars)")
+    log(f"[Ollama] Stream complete ({len(response_text)} chars)")
     return response_text
 
 
@@ -244,10 +332,10 @@ async def text_to_speech(text: str) -> Optional[bytes]:
             return None
 
         if stdout:
-            print(f"[TTS] Generated {len(stdout)} bytes of audio")
+            log(f"[TTS] Generated {len(stdout)} bytes of audio")
             return stdout
         
-        print("[TTS] No audio data generated")
+        log("[TTS] No audio data generated")
         return None
 
     except FileNotFoundError:
@@ -300,8 +388,7 @@ class AudioBuffer:
         else:
             # Speech detected
             if self.speech_start_time is None:
-                print(f"[VAD] Speech detected (RMS: {rms:.4f})")
-                self.speech_start_time = current_time
+                log(f"[VAD] Speech detected (RMS: {rms:.4f})")
             self.silent_duration = 0.0
 
     def add_silence(self, duration: float):
@@ -343,7 +430,7 @@ class AudioBuffer:
 
 async def handle_websocket(websocket: WebSocket):
     """Handle a WebSocket connection for the voice pipeline."""
-    print("[WS] Client connected")
+    log("[WS] Client connected")
     await manager.connect(websocket)
 
     audio_buffer = AudioBuffer(VAD_THRESHOLD, VAD_MIN_SPEECH, VAD_ENERGY_THRESHOLD, AUDIO_SAMPLE_RATE)
@@ -365,7 +452,7 @@ async def handle_websocket(websocket: WebSocket):
         # Transcription Gate: Check if the overall energy is high enough to be real speech
         total_rms = get_rms(audio_data)
         if not force and total_rms < VAD_ENERGY_THRESHOLD * 1.2:
-            print(f"[VAD] Ignoring low-energy segment (RMS: {total_rms:.4f})")
+            log(f"[VAD] Ignoring low-energy segment (RMS: {total_rms:.4f})")
             audio_buffer.clear()
             return
 
@@ -377,7 +464,7 @@ async def handle_websocket(websocket: WebSocket):
                 pass
 
         audio_buffer.clear()
-        print(f"[VAD] Triggering transcription ({len(audio_data)} bytes, RMS: {total_rms:.4f})")
+        log(f"[VAD] Triggering transcription ({len(audio_data)} bytes, RMS: {total_rms:.4f})")
         await websocket.send_json({"type": "transcribing", "content": ""})
         
         try:
@@ -386,18 +473,34 @@ async def handle_websocket(websocket: WebSocket):
             # Hallucination Filter: Whisper often hallucinations common phrases on noise
             hallucinations = ["thank you", "thanks for watching", "bye", "subscrib"]
             if text and any(h in text.lower() for h in hallucinations) and total_rms < VAD_ENERGY_THRESHOLD * 2.0:
-                print(f"[STT] Filtered hallucination: {text}")
+                log(f"[STT] Filtered hallucination: {text}")
                 text = ""
 
             if text:
-                print(f"[STT] {text}")
+                log(f"[STT] {text}")
                 await websocket.send_json({"type": "text", "content": text})
                 chat_history.append({"role": "user", "content": text})
-                response = await stream_to_ollama(chat_history, websocket)
+
+                # Recall relevant memories from Hindsight
+                memories = await recall_memories(text, limit=3)
+                if memories:
+                    context_prompt = "\n".join([f"- {m}" for m in memories])
+                    log(f"[Hindsight] Retrieved {len(memories)} memories")
+                    # Insert system message with context at the beginning
+                    system_msg = {"role": "system", "content": f"Relevant past conversations:\n{context_prompt}\n\nYou are a helpful voice assistant."}
+                    llm_messages = [system_msg] + chat_history
+                else:
+                    llm_messages = chat_history
+
+                response = await stream_to_ollama(llm_messages, websocket)
                 chat_history.append({"role": "assistant", "content": response})
                 await websocket.send_json({"type": "done", "content": response})
+
+                # Store conversation in Hindsight
+                memory_content = f"User: {text}\nAssistant: {response}"
+                await retain_memory(memory_content, context="voice conversation", tags=["conversation"])
             else:
-                print("[STT] No meaningful speech detected")
+                log("[STT] No meaningful speech detected")
                 await websocket.send_json({"type": "done", "content": ""})
         finally:
             is_processing = False
@@ -447,7 +550,7 @@ async def handle_websocket(websocket: WebSocket):
                 # Periodic RMS logging for calibration (every 2 seconds)
                 if current_time - last_rms_log_time > 2.0:
                     rms = get_rms(audio_chunk)
-                    print(f"[Audio] Current RMS: {rms:.5f} (Threshold: {VAD_ENERGY_THRESHOLD})")
+                    log(f"[Audio] Current RMS: {rms:.5f} (Threshold: {VAD_ENERGY_THRESHOLD})")
                     last_rms_log_time = current_time
 
                 # Check VAD after each chunk (handles continuous streaming)
@@ -457,7 +560,7 @@ async def handle_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
-        print(f"[WS] Error: {e}")
+        log(f"[WS] Error: {e}")
         try:
             await websocket.send_json({
                 "type": "error",
@@ -474,7 +577,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         await handle_websocket(websocket)
     except Exception as e:
-        print(f"[WS] Error in handler: {e}")
+        log(f"[WS] Error in handler: {e}")
         try:
             await websocket.close(1011, str(e))
         except:
