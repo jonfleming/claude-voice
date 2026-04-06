@@ -112,13 +112,13 @@ def recall_memories(query: str, budget: str = "low") -> list:
 
 async def retain_memory_async(content: str, context: str = "", tags: list = None) -> bool:
     """Store a memory in Hindsight (async wrapper)."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, retain_memory, content, context, tags)
 
 
 async def recall_memories_async(query: str, budget: str = "low") -> list:
     """Recall relevant memories from Hindsight (async wrapper)."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, recall_memories, query, budget)
 
 
@@ -202,11 +202,13 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
 
     response_text = ""
     pending_text = ""
+    session = None
 
     try:
-        async with aiohttp.ClientSession() as session:
-            log(f"[Ollama] Posting {payload} \nto {url}...")
-            async with session.post(url, json=payload) as resp:
+        session = aiohttp.ClientSession()
+        await session.__aenter__()
+        log(f"[Ollama] Posting {payload} \nto {url}...")
+        async with session.post(url, json=payload) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
                     log(f"[Ollama] Error: {resp.status} - {error_text}")
@@ -285,6 +287,9 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
             "content": f"Ollama connection error: {str(e)}"
         })
         raise
+    finally:
+        if session:
+            await session.close()
 
     log(f"[Ollama] Stream complete ({len(response_text)} chars)")
     return response_text

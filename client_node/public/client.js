@@ -122,9 +122,18 @@ connectBtn.onclick = () => {
                 isServerProcessing = true;
                 statusMsg.textContent = 'AI is thinking...';
                 currentAiMessageElement = null; // Prepare for new response
+            } else if (msg.type === 'stop_recording') {
+                // Server is processing, stop the microphone
+                if (micStream) {
+                    stopMicrophone();
+                }
             } else if (msg.type === 'done') {
                 isServerProcessing = false;
                 statusMsg.textContent = 'Ready';
+                // Auto-restart microphone after AI finishes speaking
+                if (!micStream) {
+                    startMicrophone();
+                }
             } else if (msg.type === 'text') {
                 addMessage(msg.content, 'user');
             } else if (msg.type === 'response') {
