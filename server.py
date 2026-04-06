@@ -137,6 +137,24 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
 
+async def safe_send_json(websocket: WebSocket, data: dict) -> bool:
+    """Safely send JSON, returns False if connection is closed."""
+    try:
+        await websocket.send_json(data)
+        return True
+    except Exception:
+        return False
+
+
+async def safe_send_bytes(websocket: WebSocket, data: bytes) -> bool:
+    """Safely send bytes, returns False if connection is closed."""
+    try:
+        await websocket.send_bytes(data)
+        return True
+    except Exception:
+        return False
+
+
 manager = ConnectionManager()
 
 
@@ -226,10 +244,9 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                                 pending_text += token
 
                                 # Send token to client
-                                await websocket.send_json({
-                                    "type": "response",
-                                    "content": token
-                                })
+                                if not await safe_send_json(websocket, {"type": "response", "content": token}):
+                                    log("[WS] Connection closed during streaming")
+                                    return response_text
 
                                 # Generate TTS on sentence boundaries or if too long
                                 if (len(pending_text) >= 20 and any(c in pending_text for c in ".!?\n")) or len(pending_text) >= 120:
@@ -239,7 +256,7 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                                         if char in ".!?\n":
                                             last_punct = len(pending_text) - i
                                             break
-                                    
+
                                     if last_punct != -1:
                                         text_segment = pending_text[:last_punct]
                                         pending_text = pending_text[last_punct:]
@@ -252,13 +269,12 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                                         audio = await text_to_speech(text_segment)
                                         if audio:
                                             # Send as raw binary frame for ESP32 efficiency
-                                            await websocket.send_bytes(audio)
+                                            if not await safe_send_bytes(websocket, audio):
+                                                log("[WS] Connection closed during TTS")
+                                                return response_text
                                             # Also send JSON for web clients that might not handle binary well
                                             audio_b64 = base64.b64encode(audio).decode()
-                                            await websocket.send_json({
-                                                "type": "audio",
-                                                "data": audio_b64
-                                            })
+                                            await safe_send_json(websocket, {"type": "audio", "data": audio_b64})
 
 
                         except json.JSONDecodeError:
@@ -272,17 +288,16 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                     audio = await text_to_speech(pending_text)
                     if audio:
                         # Send as raw binary frame
-                        await websocket.send_bytes(audio)
+                        if not await safe_send_bytes(websocket, audio):
+                            log("[WS] Connection closed during final TTS")
+                            return response_text
                         # Also send JSON
                         audio_b64 = base64.b64encode(audio).decode()
-                        await websocket.send_json({
-                            "type": "audio",
-                            "data": audio_b64
-                        })
+                        await safe_send_json(websocket, {"type": "audio", "data": audio_b64})
 
     except Exception as e:
         log(f"[Ollama] Exception: {e}")
-        await websocket.send_json({
+        await safe_send_json(websocket, {
             "type": "error",
             "content": f"Ollama connection error: {str(e)}"
         })
@@ -462,18 +477,15 @@ async def handle_websocket(websocket: WebSocket):
 
         is_processing = True
         if not force:
-            try:
-                await websocket.send_json({"type": "stop_recording"})
-            except:
-                pass
+            await safe_send_json(websocket, {"type": "stop_recording"})
 
         audio_buffer.clear()
         log(f"[VAD] Triggering transcription ({len(audio_data)} bytes, RMS: {total_rms:.4f})")
-        await websocket.send_json({"type": "transcribing", "content": ""})
-        
+        await safe_send_json(websocket, {"type": "transcribing", "content": ""})
+
         try:
             text = await transcribe_audio(audio_data)
-            
+
             # Hallucination Filter: Whisper often hallucinations common phrases on noise
             hallucinations = ["thank you", "thanks for watching", "bye", "subscrib"]
             if text and any(h in text.lower() for h in hallucinations) and total_rms < VAD_ENERGY_THRESHOLD * 2.0:
@@ -482,7 +494,7 @@ async def handle_websocket(websocket: WebSocket):
 
             if text:
                 log(f"[STT] {text}")
-                await websocket.send_json({"type": "text", "content": text})
+                await safe_send_json(websocket, {"type": "text", "content": text})
                 chat_history.append({"role": "user", "content": text})
 
                 # Include any pending memories from previous turn
@@ -497,7 +509,7 @@ async def handle_websocket(websocket: WebSocket):
 
                 response = await stream_to_ollama(llm_messages, websocket)
                 chat_history.append({"role": "assistant", "content": response})
-                await websocket.send_json({"type": "done", "content": response})
+                await safe_send_json(websocket, {"type": "done", "content": response})
 
                 # Queue recall for next turn (fire and forget)
                 asyncio.create_task(queue_recall(text))
@@ -507,7 +519,7 @@ async def handle_websocket(websocket: WebSocket):
                 await retain_memory_async(memory_content, context="voice conversation", tags=["conversation"])
             else:
                 log("[STT] No meaningful speech detected")
-                await websocket.send_json({"type": "done", "content": ""})
+                await safe_send_json(websocket, {"type": "done", "content": ""})
         finally:
             is_processing = False
 
@@ -537,7 +549,7 @@ async def handle_websocket(websocket: WebSocket):
                 msg_type = message.get("type")
 
                 if msg_type == "ping":
-                    await websocket.send_json({"type": "pong"})
+                    await safe_send_json(websocket, {"type": "pong"})
                 elif msg_type == "transcribe":
                     await trigger_transcription(force=True)
                 elif msg_type == "stream":
@@ -567,13 +579,10 @@ async def handle_websocket(websocket: WebSocket):
         manager.disconnect(websocket)
     except Exception as e:
         log(f"[WS] Error: {e}")
-        try:
-            await websocket.send_json({
-                "type": "error",
-                "content": str(e)
-            })
-        except:
-            pass
+        await safe_send_json(websocket, {
+            "type": "error",
+            "content": str(e)
+        })
         manager.disconnect(websocket)
 
 
