@@ -31,7 +31,7 @@ load_dotenv()
 
 
 # Configuration
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://100.120.84.114:11434")
 if not OLLAMA_HOST.startswith("http"):
     OLLAMA_HOST = f"http://{OLLAMA_HOST}"
 OLLAMA_HOST = OLLAMA_HOST.rstrip("/")

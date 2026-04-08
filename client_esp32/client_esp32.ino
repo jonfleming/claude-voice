@@ -46,10 +46,10 @@ SemaphoreHandle_t ws_mutex = NULL;
 #define MOLLOC_SIZE (4 * 1024 * 1024)
 
 // ---------- WiFi / Server configuration (edit before upload) ----------
-#define WIFI_SSID "TeamSantiago"
-#define WIFI_PASS "4peeps3pets"
+#define WIFI_SSID "FLEMING_2"
+#define WIFI_PASS "90130762"
 // The server that runs your transcription/TTS services (Raspberry Pi IP)
-#define SERVER_IP "10.0.0.51"
+#define SERVER_IP "192.168.0.108"
 #define CLAUDE_VOICE_WS_PORT 8080
 #define CLAUDE_VOICE_WS_PATH "/ws"
 
