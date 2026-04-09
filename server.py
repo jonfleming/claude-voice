@@ -265,16 +265,9 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                                         pending_text = ""
 
                                     if text_segment.strip():
-                                        log(f"[TTS] Generating audio for: {text_segment.strip()}")
-                                        audio = await text_to_speech(text_segment)
-                                        if audio:
-                                            # Send as raw binary frame for ESP32 efficiency
-                                            if not await safe_send_bytes(websocket, audio):
-                                                log("[WS] Connection closed during TTS")
-                                                return response_text
-                                            # Also send JSON for web clients that might not handle binary well
-                                            audio_b64 = base64.b64encode(audio).decode()
-                                            await safe_send_json(websocket, {"type": "audio", "data": audio_b64})
+                                        log(f"[TTS] Scheduling background audio generation for: {text_segment.strip()}")
+                                        # Schedule TTS generation/send in background so we don't block Ollama stream
+                                        asyncio.create_task(_generate_and_send_tts(text_segment, websocket))
 
 
                         except json.JSONDecodeError:
@@ -284,16 +277,8 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                 # Generate final TTS for remaining text
                 log(f"[Ollama] Stream ended, generating final TTS for remaining text...")
                 if pending_text.strip():
-                    log(f"[TTS] Generating final audio for: {pending_text.strip()}")
-                    audio = await text_to_speech(pending_text)
-                    if audio:
-                        # Send as raw binary frame
-                        if not await safe_send_bytes(websocket, audio):
-                            log("[WS] Connection closed during final TTS")
-                            return response_text
-                        # Also send JSON
-                        audio_b64 = base64.b64encode(audio).decode()
-                        await safe_send_json(websocket, {"type": "audio", "data": audio_b64})
+                    log(f"[TTS] Scheduling background final audio for: {pending_text.strip()}")
+                    asyncio.create_task(_generate_and_send_tts(pending_text, websocket))
 
     except Exception as e:
         log(f"[Ollama] Exception: {e}")
@@ -351,6 +336,26 @@ async def text_to_speech(text: str) -> Optional[bytes]:
     except Exception as e:
         print(f"TTS error: {e}")
         return None
+
+
+async def _generate_and_send_tts(text: str, websocket: WebSocket):
+    """Background helper: synthesize TTS and send to websocket without blocking the LLM stream."""
+    try:
+        audio = await text_to_speech(text)
+        if not audio:
+            return
+
+        # Send raw binary first (preferred by embedded clients)
+        if not await safe_send_bytes(websocket, audio):
+            log("[WS] Connection closed during background TTS send")
+            return
+
+        # Also send base64 JSON for web clients
+        audio_b64 = base64.b64encode(audio).decode()
+        await safe_send_json(websocket, {"type": "audio", "data": audio_b64})
+        log(f"[TTS] Background send complete ({len(audio)} bytes)")
+    except Exception as e:
+        log(f"[TTS] Background exception: {e}")
 
 
 class AudioBuffer:
