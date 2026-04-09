@@ -558,12 +558,18 @@ void handle_button_events() {
         Serial.println("[Button] Stopping listening...");
         stop_recorder_task();
       }
-      if (player_task_handle != NULL) {
+      bool was_player_running = (player_task_handle != NULL);
+      if (was_player_running) {
         Serial.println("[Button] Stopping playback...");
         stop_player_task();
         i2s_output_stream_end();
       }
-      button_abort = true; // Signal to stop any ongoing recording/playback
+      // Only set button_abort when actively aborting playback. Do NOT set
+      // it when stopping the recorder so that the device can still accept
+      // the TTS response coming back from the server after manual stop.
+      if (was_player_running) {
+        button_abort = true; // Signal to stop any ongoing playback
+      }
       request_showBootInstructions("Press button to start a conversation.");
     } else {
       // Start a new conversation

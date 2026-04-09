@@ -324,6 +324,7 @@ async def text_to_speech(text: str) -> Optional[bytes]:
         process = await asyncio.create_subprocess_exec(
             "piper",
             "--model", model_path,
+            "--length_scale", "0.75",   # Shorten duration for more responsive TTS
             "--output_file", "-",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -390,18 +391,24 @@ class AudioBuffer:
     def _update_vad(self, rms: float, duration: float, current_time: float):
         """Internal VAD state update."""
         if rms < self.energy_threshold:
+            # accumulate silence
             self.silent_duration += duration
+            log(f"[VAD-Window] RMS: {rms:.5f} (silence), +{duration:.3f}s -> silent_duration={self.silent_duration:.3f}s")
         else:
             # Speech detected
             if self.speech_start_time is None:
                 log(f"[VAD] Speech detected (RMS: {rms:.4f})")
                 self.speech_start_time = current_time
+            else:
+                # Update speech presence (useful for long speech segments)
+                log(f"[VAD-Window] RMS: {rms:.5f} (speech), silent_duration reset")
             self.silent_duration = 0.0
 
     def add_silence(self, duration: float):
         """Manually add silence duration (used on connection timeouts)."""
         if self.buffer:
             self.silent_duration += duration
+            log(f"[VAD] add_silence: +{duration:.3f}s -> silent_duration={self.silent_duration:.3f}s")
 
     def get_audio(self) -> bytes:
         """Get all buffered audio."""
@@ -421,11 +428,12 @@ class AudioBuffer:
 
         # If silence has lasted longer than threshold
         if self.silent_duration >= self.vad_threshold:
+            log(f"[VAD] check_vad: silent_duration={self.silent_duration:.3f}s >= vad_threshold={self.vad_threshold:.3f}s; speech_start_time={self.speech_start_time}")
             # Check we have enough speech duration to care
             if self.speech_start_time is not None and self.last_audio_time is not None:
                 speech_duration = self.last_audio_time - self.speech_start_time
                 if speech_duration >= self.min_speech:
-                    log(f"[VAD] Silent threshold reached, speech duration: {speech_duration:.2f}s")
+                    log(f"[VAD] Silent threshold reached, speech duration: {speech_duration:.2f}s -> trigger transcription")
                     return True
             
             # If we have reached the silence threshold but never detected speech,
