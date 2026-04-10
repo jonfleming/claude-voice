@@ -57,8 +57,8 @@ async def stream_audio(file_path, url, chunk_ms=50):
                             await asyncio.sleep(sleep_time)
                 
                 print("Finished streaming file.")
-                # Keep connection open for a bit to receive the last response
-                await asyncio.sleep(5)
+                # Keep connection open longer to receive the last response (allow TTS generation)
+                await asyncio.sleep(30)
                 await ws.close()
                 recv_task.cancel()
                 
