@@ -583,7 +583,7 @@ async def handle_websocket(websocket: WebSocket):
             text = await transcribe_audio(audio_data)
 
             # Hallucination Filter: Whisper often hallucinations common phrases on noise
-            hallucinations = ["thank you", "thanks for watching", "bye", "subscrib"]
+            hallucinations = ["thank", "you", "thanks for watching", "bye", "subscrib"]
             if text and any(h in text.lower() for h in hallucinations) and total_rms < VAD_ENERGY_THRESHOLD * 2.0:
                 log(f"[STT] Filtered hallucination: {text}")
                 text = ""
