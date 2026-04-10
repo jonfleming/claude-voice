@@ -1,2 +1,2 @@
-default_fqbn: esp32:esp32:esp32s3
+default_fqbn: esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=fatflash,PSRAM=opi
 default_port: /dev/ttyACM0
