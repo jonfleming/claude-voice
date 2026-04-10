@@ -27,6 +27,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from hindsight_client import Hindsight
 
+# Optional Python piper package (preferred over CLI if available)
+try:
+    import piper_tts as piper_pkg
+except Exception:
+    piper_pkg = None
+
 load_dotenv()
 
 
@@ -205,7 +211,7 @@ async def transcribe_audio(audio_data: bytes) -> str:
     return text.strip()
 
 
-async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
+async def stream_to_ollama(messages: list[dict], websocket: WebSocket, tts_queue: Optional[asyncio.Queue] = None) -> str:
     """Send message history to Ollama and stream the response with TTS."""
     global piper_process
 
@@ -265,9 +271,13 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                                         pending_text = ""
 
                                     if text_segment.strip():
-                                        log(f"[TTS] Scheduling background audio generation for: {text_segment.strip()}")
-                                        # Schedule TTS generation/send in background so we don't block Ollama stream
-                                        asyncio.create_task(_generate_and_send_tts(text_segment, websocket))
+                                        log(f"[TTS] Enqueuing audio generation for: {text_segment.strip()}")
+                                        # Enqueue TTS so a single worker synthesizes/sends in FIFO order
+                                        if tts_queue is not None:
+                                            await tts_queue.put(text_segment)
+                                        else:
+                                            # Fallback to previous behavior (background task) if no queue provided
+                                            asyncio.create_task(_generate_and_send_tts(text_segment, websocket))
 
 
                         except json.JSONDecodeError:
@@ -277,8 +287,11 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket) -> str:
                 # Generate final TTS for remaining text
                 log(f"[Ollama] Stream ended, generating final TTS for remaining text...")
                 if pending_text.strip():
-                    log(f"[TTS] Scheduling background final audio for: {pending_text.strip()}")
-                    asyncio.create_task(_generate_and_send_tts(pending_text, websocket))
+                    log(f"[TTS] Enqueuing background final audio for: {pending_text.strip()}")
+                    if tts_queue is not None:
+                        await tts_queue.put(pending_text)
+                    else:
+                        asyncio.create_task(_generate_and_send_tts(pending_text, websocket))
 
     except Exception as e:
         log(f"[Ollama] Exception: {e}")
@@ -303,20 +316,68 @@ async def text_to_speech(text: str) -> Optional[bytes]:
     model_path = PIPER_MODEL
     if PIPER_MODEL_DIR:
         model_path = str(Path(PIPER_MODEL_DIR) / PIPER_MODEL)
+    # First attempt: use the `piper-tts` Python package if available.
+    if piper_pkg is not None:
+        try:
+            # Try several common function names that piper packages might expose.
+            candidate_names = ("synthesize", "synthesize_text", "generate", "generate_tts", "tts", "speak")
+            for name in candidate_names:
+                if hasattr(piper_pkg, name):
+                    func = getattr(piper_pkg, name)
+                    try:
+                        # Prefer keyword args where supported
+                        result = func(text, model=str(model_path), sample_rate=AUDIO_SAMPLE_RATE, length_scale=0.75)
+                    except TypeError:
+                        # Fallback to positional args
+                        try:
+                            result = func(text, str(model_path))
+                        except Exception:
+                            result = func(text)
 
+                    # If we get raw bytes, return as-is
+                    if isinstance(result, (bytes, bytearray)):
+                        log(f"[TTS] Generated {len(result)} bytes via piper_pkg.{name}")
+                        return bytes(result)
+
+                    # If we get a numpy array or list, convert to WAV bytes
+                    if isinstance(result, np.ndarray) or isinstance(result, list):
+                        arr = np.asarray(result)
+                        # If float32/64, assume -1..1 range
+                        if np.issubdtype(arr.dtype, np.floating):
+                            pcm = (arr * 32767.0).astype(np.int16)
+                        elif np.issubdtype(arr.dtype, np.integer):
+                            pcm = arr.astype(np.int16)
+                        else:
+                            pcm = arr.astype(np.int16)
+
+                        import io, wave
+                        buf = io.BytesIO()
+                        with wave.open(buf, "wb") as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(AUDIO_SAMPLE_RATE)
+                            wf.writeframes(pcm.tobytes())
+                        data = buf.getvalue()
+                        log(f"[TTS] Generated {len(data)} WAV bytes via piper_pkg.{name}")
+                        return data
+
+            # If no known function produced usable output, log and fall back
+            log("[TTS] piper_pkg available but produced no usable audio, falling back to CLI")
+        except Exception as e:
+            log(f"[TTS] piper_pkg invocation failed: {e}; falling back to CLI")
+
+    # Fallback: call the `piper` CLI as before
     try:
-        # Create a fresh process for each segment to ensure stdout is flushed and EOF is reached
         process = await asyncio.create_subprocess_exec(
             "piper",
             "--model", model_path,
-            "--length_scale", "0.75",   # Shorten duration for more responsive TTS
+            "--length_scale", "0.75",
             "--output_file", "-",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
 
-        # Send text and close stdin to signal EOF to Piper
         stdout, stderr = await process.communicate(input=text.encode() + b"\n")
 
         if process.returncode != 0:
@@ -324,14 +385,14 @@ async def text_to_speech(text: str) -> Optional[bytes]:
             return None
 
         if stdout:
-            log(f"[TTS] Generated {len(stdout)} bytes of audio")
+            log(f"[TTS] Generated {len(stdout)} bytes of audio (CLI)")
             return stdout
-        
-        log("[TTS] No audio data generated")
+
+        log("[TTS] No audio data generated (CLI)")
         return None
 
     except FileNotFoundError:
-        print("Piper not found. Make sure piper is in PATH.")
+        print("Piper not found. Make sure piper is in PATH or install the `piper-tts` package.")
         return None
     except Exception as e:
         print(f"TTS error: {e}")
@@ -356,6 +417,25 @@ async def _generate_and_send_tts(text: str, websocket: WebSocket):
         log(f"[TTS] Background send complete ({len(audio)} bytes)")
     except Exception as e:
         log(f"[TTS] Background exception: {e}")
+
+
+async def _tts_worker(tts_queue: asyncio.Queue, websocket: WebSocket):
+    """Worker that processes TTS requests from a FIFO queue, synthesizes audio,
+    and sends them to the websocket in order. Use `None` as sentinel to stop."""
+    try:
+        while True:
+            text = await tts_queue.get()
+            if text is None:
+                tts_queue.task_done()
+                break
+            try:
+                await _generate_and_send_tts(text, websocket)
+            except Exception as e:
+                log(f"[TTS-Worker] Exception for segment: {e}")
+            finally:
+                tts_queue.task_done()
+    except asyncio.CancelledError:
+        pass
 
 
 class AudioBuffer:
@@ -455,6 +535,9 @@ async def handle_websocket(websocket: WebSocket):
     """Handle a WebSocket connection for the voice pipeline."""
     log("[WS] Client connected")
     await manager.connect(websocket)
+    # Per-connection TTS queue and worker to preserve audio ordering
+    tts_queue: asyncio.Queue = asyncio.Queue()
+    tts_worker_task = asyncio.create_task(_tts_worker(tts_queue, websocket))
 
     audio_buffer = AudioBuffer(VAD_THRESHOLD, VAD_MIN_SPEECH, VAD_ENERGY_THRESHOLD, AUDIO_SAMPLE_RATE)
     chat_history: list[dict] = []
@@ -520,7 +603,7 @@ async def handle_websocket(websocket: WebSocket):
                 else:
                     llm_messages = chat_history
 
-                response = await stream_to_ollama(llm_messages, websocket)
+                response = await stream_to_ollama(llm_messages, websocket, tts_queue)
                 chat_history.append({"role": "assistant", "content": response})
                 await safe_send_json(websocket, {"type": "done", "content": response})
 
@@ -597,6 +680,17 @@ async def handle_websocket(websocket: WebSocket):
             "content": str(e)
         })
         manager.disconnect(websocket)
+    finally:
+        # Shutdown TTS worker gracefully
+        try:
+            # enqueue sentinel and wait for worker to finish
+            await tts_queue.put(None)
+            await asyncio.wait_for(tts_worker_task, timeout=5.0)
+        except Exception:
+            try:
+                tts_worker_task.cancel()
+            except Exception:
+                pass
 
 
 @app.websocket("/ws")

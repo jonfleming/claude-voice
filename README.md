@@ -44,14 +44,37 @@ pip install -r requirements.txt
 # faster-whisper downloads "small" by default
 ```
 
-4. Download Piper TTS model:
+4. Piper TTS models (voices)
+
+Piper uses compiled voice models (.onnx) paired with a small JSON metadata file. Place models under `~/.local/share/piper/models` (or set `PIPER_MODEL_DIR` in `.env`).
+
+Example: download the English Lessac medium voice
 ```bash
-# For English medium voice
 mkdir -p ~/.local/share/piper/models
 cd ~/.local/share/piper/models
-curl -O https://github.com/rhasspy/piper/releases/download/2024.01.16/en_US-lessac-medium.onnx
-curl -O https://github.com/rhasspy/piper/releases/download/2024.01.16/en_US-lessac-medium.onnx.json
+curl -L -O https://github.com/rhasspy/piper/releases/download/2024.01.16/en_US-lessac-medium.onnx
+curl -L -O https://github.com/rhasspy/piper/releases/download/2024.01.16/en_US-lessac-medium.onnx.json
 ```
+
+Find additional voices and releases on the Piper GitHub releases page:
+
+- https://github.com/rhasspy/piper/releases
+
+After downloading, set the model name in `.env` (the filename of the `.onnx` file):
+
+```
+PIPER_MODEL=en_US-lessac-medium.onnx
+# Or point to a directory containing multiple models
+PIPER_MODEL_DIR=$HOME/.local/share/piper/models
+```
+
+Optional: use the Python package `piper-tts` instead of the CLI. Install with pip:
+
+```bash
+pip install piper-tts
+```
+
+`server.py` will prefer the Python package if available and fall back to the `piper` CLI. If you rely on the CLI, ensure the `piper` binary is installed and on your `PATH`.
 
 5. Start Ollama:
 ```bash
