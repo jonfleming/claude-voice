@@ -1,7 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv run:*)"
+      "Bash(uv run:*)",
+      "Bash(rm -rf .venv)",
+      "Bash(pip install:*)",
+      "Bash(uv venv:*)",
+      "Bash(source:*)",
+      "Bash(uv pip:*)",
+      "Bash(.venv/bin/pytest)",
+      "Bash(.venv/bin/pytest -v)"
     ]
   }
 }

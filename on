@@ -1,38 +1,62 @@
 # 🤖 Copilot CLI Session
 
-> **Session ID:** `1baaaa97-e67d-42b5-ba10-31d421f1cb0b`
-> **Started:** 4/8/2026, 12:27:46 AM
-> **Duration:** 10s
-> **Exported:** 4/8/2026, 12:27:56 AM
-
-<sub>⏱️ 2s</sub>
-
-### 👤 User
-
-Can Python .env files contain comments?
+> [!NOTE]
+> - **Session ID:** `1baaaa97-e67d-42b5-ba10-31d421f1cb0b`  
+> - **Started:** 4/9/2026, 8:03:06 PM  
+> - **Duration:** 11s  
+> - **Exported:** 4/9/2026, 8:03:18 PM  
 
 ---
 
-<sub>⏱️ 10s</sub>
+<sub>⏱️ 4s</sub>
+
+### 👤 User
+
+how do I prevent WSL from appending Windows folders to PATH?
+
+---
+
+<sub>⏱️ 11s</sub>
 
 ### 💬 Copilot
 
-Yes, `.env` files support comments using the `#` character:
+To prevent WSL from appending Windows folders to PATH, edit or create `/etc/wsl.conf`:
 
 ```bash
-# This is a full-line comment
-OLLAMA_HOST=http://localhost:11434  # Inline comment after value
-
-# You can comment out variables
-# DEBUG=true
-
-VAD_THRESHOLD=1.5
+sudo nano /etc/wsl.conf
 ```
 
-**Key points:**
-- `#` starts a comment (rest of line ignored)
-- Works at line start or after values
-- Most Python `.env` parsers (like `python-dotenv`) support this standard format
+Add this configuration:
+
+```ini
+[interop]
+appendWindowsPath = false
+```
+
+Then **restart WSL** from PowerShell/CMD:
+
+```powershell
+wsl --shutdown
+```
+
+Next time you start WSL, Windows paths won't be in your PATH.
+
+**Alternative - Selective Control:**
+
+If you want some Windows tools but not all paths:
+
+```ini
+[interop]
+appendWindowsPath = false
+```
+
+Then manually add specific Windows tools to your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+export PATH="$PATH:/mnt/c/Windows/System32"
+```
+
+This gives you full control over which Windows directories are accessible.
 
 ---
 
