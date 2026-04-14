@@ -651,6 +651,21 @@ async def handle_websocket(websocket: WebSocket):
                 elif msg_type == "stream":
                     # Force process current buffer
                     await trigger_transcription(force=True)
+                elif msg_type == "config":
+                    # Dynamically update VAD energy threshold for this connection
+                    if "energy_threshold" in message:
+                        new_threshold = float(message["energy_threshold"])
+                        if 0 < new_threshold < 1.0:
+                            audio_buffer.energy_threshold = new_threshold
+                            log(f"[Config] Updated VAD energy threshold to {new_threshold:.5f}")
+                            await safe_send_json(websocket, {
+                                "type": "config_ack",
+                                "energy_threshold": new_threshold
+                            })
+                        else:
+                            log(f"[Config] Invalid energy_threshold: {new_threshold}")
+                    else:
+                        log("[Config] Received config message without energy_threshold")
 
             elif "bytes" in data:
                 # Audio data

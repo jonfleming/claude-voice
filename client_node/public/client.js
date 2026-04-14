@@ -93,6 +93,9 @@ connectBtn.onclick = () => {
         connectBtn.textContent = 'Disconnect';
         micBtn.disabled = false;
         statusMsg.textContent = 'Ready';
+        // Dynamically set VAD energy threshold for browser mic input
+        // Browser audio tends to have lower energy than ESP32 hardware input
+        ws.send(JSON.stringify({type: "config", energy_threshold: 0.01}));
     };
 
     ws.onclose = () => {
