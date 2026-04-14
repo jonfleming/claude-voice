@@ -1,0 +1,21 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${userHome}/Arduino/libraries/**",
+                "${userHome}/.arduino15/packages/esp32/hardware/esp32/**"
+            ],
+            "browse": {
+                "path": [
+                    "${userHome}/.arduino15/packages/esp32/hardware/esp32/**"
+                ]
+            },
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}

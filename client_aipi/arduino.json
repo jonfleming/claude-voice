@@ -1,0 +1,7 @@
+{
+    "sketch": "client_aipi.ino",
+    "board": "esp32:esp32:esp32s3",
+    "configuration": "FlashSize=16M,PartitionScheme=fatflash,PSRAM=opi",
+    "output": "build",
+    "port": "/dev/ttyACM0"
+}
