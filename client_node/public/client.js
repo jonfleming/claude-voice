@@ -7,6 +7,7 @@ let animationId = null;
 
 let isServerProcessing = false;
 let isPlaying = false;
+let awaitingAudioDone = false;
 let audioQueue = [];
 let currentAiMessageElement = null;
 
@@ -63,6 +64,9 @@ function updateAiMessage(text) {
 function playNextAudio() {
     if (audioQueue.length === 0) {
         isPlaying = false;
+        if (!awaitingAudioDone && !micStream) {
+            startMicrophone();
+        }
         return;
     }
 
@@ -123,6 +127,7 @@ connectBtn.onclick = () => {
             
             if (msg.type === 'transcribing') {
                 isServerProcessing = true;
+                awaitingAudioDone = false;
                 statusMsg.textContent = 'AI is thinking...';
                 currentAiMessageElement = null; // Prepare for new response
             } else if (msg.type === 'stop_recording') {
@@ -132,9 +137,12 @@ connectBtn.onclick = () => {
                 }
             } else if (msg.type === 'done') {
                 isServerProcessing = false;
+                awaitingAudioDone = true;
+                statusMsg.textContent = 'AI is speaking...';
+            } else if (msg.type === 'audio_done') {
+                awaitingAudioDone = false;
                 statusMsg.textContent = 'Ready';
-                // Auto-restart microphone after AI finishes speaking
-                if (!micStream) {
+                if (!isPlaying && audioQueue.length === 0 && !micStream) {
                     startMicrophone();
                 }
             } else if (msg.type === 'text') {
@@ -234,7 +242,7 @@ function stopMicrophone() {
     
     micBtn.classList.remove('active');
     micBtnText.textContent = 'Start Listening';
-    statusMsg.textContent = 'Ready';
+    statusMsg.textContent = awaitingAudioDone ? 'AI is speaking...' : 'Ready';
     
     // Clear visualizer
     canvasCtx.fillStyle = 'black';

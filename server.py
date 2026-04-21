@@ -797,6 +797,7 @@ async def get_index():
                 
                 let isServerProcessing = false;
                 let isPlaying = false;
+                let awaitingAudioDone = false;
                 let audioQueue = [];
 
                 const debugToggle = document.getElementById('debugToggle');
@@ -924,15 +925,21 @@ async def get_index():
                                 
                                 if (msg.type === 'transcribing') {
                                     isServerProcessing = true;
+                                    awaitingAudioDone = false;
                                     addLog('[WS] Transcribing...');
                                 } else if (msg.type === 'done') {
                                     isServerProcessing = false;
-                                    addLog('[WS] Response complete');
+                                    awaitingAudioDone = true;
+                                    addLog('[WS] Response text complete');
+                                } else if (msg.type === 'audio_done') {
+                                    awaitingAudioDone = false;
+                                    addLog('[WS] Response audio complete');
                                 } else if (msg.type === 'text') {
                                     addLog('[STT] ' + msg.content);
                                 } else if (msg.type === 'error') {
                                     addLog('[Error] ' + msg.content);
                                     isServerProcessing = false;
+                                    awaitingAudioDone = false;
                                 } else if (msg.type === 'audio' && msg.data) {
                                     // Skip if we already got binary for this segment
                                     // (Simplification: if we send both, we'll play twice if not careful.
@@ -1022,7 +1029,7 @@ async def get_index():
                             canvasCtx.fillStyle = 'rgb(0, 0, 0)';
                             canvasCtx.fillRect(0, 0, visualizer.width, visualizer.height);
                             canvasCtx.lineWidth = 2;
-                            canvasCtx.strokeStyle = isServerProcessing || isPlaying ? 'rgb(100, 100, 100)' : 'rgb(0, 255, 0)';
+                            canvasCtx.strokeStyle = isServerProcessing || isPlaying || awaitingAudioDone ? 'rgb(100, 100, 100)' : 'rgb(0, 255, 0)';
                             canvasCtx.beginPath();
 
                             let sliceWidth = visualizer.width * 1.0 / bufferLength;
@@ -1049,7 +1056,7 @@ async def get_index():
 
                         processor.onaudioprocess = (e) => {
                             // Block sending if server is processing or AI is speaking
-                            if (isServerProcessing || isPlaying) {
+                            if (isServerProcessing || isPlaying || awaitingAudioDone) {
                                 return;
                             }
 
