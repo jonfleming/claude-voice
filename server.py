@@ -583,7 +583,7 @@ async def handle_websocket(websocket: WebSocket):
             text = await transcribe_audio(audio_data)
 
             # Hallucination Filter: Whisper often hallucinations common phrases on noise
-            hallucinations = ["thank", "you", "thanks for watching", "bye", "subscrib"]
+            hallucinations = ["thank", "thanks for watching", "bye", "subscrib"]
             if text and any(h in text.lower() for h in hallucinations) and total_rms < audio_buffer.energy_threshold * 2.0:
                 log(f"[STT] Filtered hallucination: {text}")
                 text = ""
@@ -606,6 +606,9 @@ async def handle_websocket(websocket: WebSocket):
                 response = await stream_to_ollama(llm_messages, websocket, tts_queue)
                 chat_history.append({"role": "assistant", "content": response})
                 await safe_send_json(websocket, {"type": "done", "content": response})
+                # Signal audio completion only after all queued TTS segments are sent.
+                await tts_queue.join()
+                await safe_send_json(websocket, {"type": "audio_done"})
 
                 # Queue recall for next turn (fire and forget)
                 asyncio.create_task(queue_recall(text))
@@ -616,6 +619,7 @@ async def handle_websocket(websocket: WebSocket):
             else:
                 log("[STT] No meaningful speech detected")
                 await safe_send_json(websocket, {"type": "done", "content": ""})
+                await safe_send_json(websocket, {"type": "audio_done"})
         finally:
             is_processing = False
 

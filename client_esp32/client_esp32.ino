@@ -92,6 +92,9 @@ volatile bool claude_ws_connecting = false;
 volatile bool resume_recorder_after_response = false;
 volatile unsigned long response_done_ms = 0;
 volatile unsigned long last_audio_payload_ms = 0;
+volatile bool response_done_received = false;
+volatile bool response_audio_seen = false;
+volatile bool response_audio_done_received = false;
 
 void request_showBootInstructions(const char *text) {
   if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
@@ -261,8 +264,15 @@ void handle_claude_ws_json(const String &json) {
   } else if (type == "done") {
     if (!button_abort) {
       Serial.println("\n[WS] Response complete.");
+      response_done_received = true;
       resume_recorder_after_response = true;
       response_done_ms = millis();
+    }
+  } else if (type == "audio_done") {
+    if (!button_abort) {
+      Serial.println("[WS] Response audio complete.");
+      response_audio_done_received = true;
+      resume_recorder_after_response = true;
     }
   } else if (type == "error") {
     String err = extract_json_string_value(json, "content");
@@ -285,7 +295,9 @@ void claude_ws_on_message(WebsocketsMessage message) {
     std::string payload = message.rawData();
     if (!payload.empty()) {
       Serial.printf("[WS] Received binary audio payload: %u bytes\n", (unsigned)payload.size());
+      response_audio_seen = true;
       last_audio_payload_ms = millis();
+      request_display_line1("Playing response...");
       player_task_handle = (TaskHandle_t)1;
       
       const uint8_t *data = (const uint8_t *)payload.data();
@@ -473,6 +485,10 @@ void loop_task_sound_recorder(void *pvParameters) {
   }
 
   button_abort = false;
+  response_done_received = false;
+  response_audio_seen = false;
+  response_audio_done_received = false;
+  last_audio_payload_ms = 0;
   Serial.println("Listening...");
   request_display_line1("Listening...");
   request_display_line2("");
@@ -515,6 +531,10 @@ void loop_task_sound_recorder(void *pvParameters) {
   }
 
   Serial.println("[Recorder] loop_task_sound_recorder stop...");
+  if (!button_abort) {
+    request_display_line1("Generating response...");
+    request_display_line2("");
+  }
   
   // Signal backend that we are done sending audio and want transcription
   if (claude_ws_connected) {
@@ -580,12 +600,18 @@ void handle_button_events() {
         button_abort = true; // Signal to stop any ongoing playback
       }
       resume_recorder_after_response = false;
+      response_done_received = false;
+      response_audio_seen = false;
+      response_audio_done_received = false;
       last_audio_payload_ms = 0;
       request_showBootInstructions("Press button to start a conversation.");
     } else {
       // Start a new conversation
       button_abort = false;
       resume_recorder_after_response = false;
+      response_done_received = false;
+      response_audio_seen = false;
+      response_audio_done_received = false;
       last_audio_payload_ms = 0;
       Serial.println("[Button] Starting continuous listening...");
       request_hideBootInstructions();
@@ -652,14 +678,30 @@ void loop() {
   }
   display.routine(); 
 
+  // Keep UI/state in response mode until backend confirms all audio is done.
   if (resume_recorder_after_response && !button_abort) {
     unsigned long now = millis();
     bool player_idle = (player_task_handle == NULL);
-    bool playback_quiet = (last_audio_payload_ms == 0) || (now - last_audio_payload_ms > 300);
-    bool done_settled = (now - response_done_ms > 120);
+    bool done_settled = response_done_received && (now - response_done_ms > 120);
 
-    if (player_idle && playback_quiet && done_settled) {
+    // Primary gate: explicit backend signal that all response audio is complete.
+    bool audio_done = response_audio_done_received;
+    // Backward-compatible fallback for older servers that don't send audio_done.
+    if (!audio_done) {
+      audio_done = response_audio_seen
+        ? (now - last_audio_payload_ms > 2500)
+        : (now - response_done_ms > 2500);
+    }
+
+    if (!audio_done || !player_idle) {
+      request_display_line1("Playing response...");
+    }
+
+    if (player_idle && audio_done && done_settled) {
       resume_recorder_after_response = false;
+      response_done_received = false;
+      response_audio_seen = false;
+      response_audio_done_received = false;
       request_display_line1("Resume recording...");
       request_display_line2("");
       start_recorder_task();
