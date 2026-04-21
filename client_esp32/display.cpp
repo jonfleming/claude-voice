@@ -39,6 +39,10 @@ int get_logical_screen_width()
   return lv_disp_get_hor_res(disp);
 }
 
+void log(const char* object, const char* message) {
+  Serial.printf("[display] %s: %s\n", object, message);
+}
+
 void layout_display_labels(Display &display_instance)
 {
   const int logical_width = get_logical_screen_width();
@@ -256,6 +260,7 @@ void Display::init(int screenDir)
 void Display::showBootInstructions(const char* text)
 {
   // If a boot label already exists, update text and make sure it's visible
+  log("boot_label", text);
   if (boot_label) {
     lv_label_set_text(boot_label, text);
     lv_obj_clear_flag(boot_label, LV_OBJ_FLAG_HIDDEN);
@@ -273,6 +278,7 @@ void Display::showBootInstructions(const char* text)
 
 void Display::hideBootInstructions()
 {
+  log("boot_label", "(Hide)");
   if (!boot_label) return;
   lv_obj_del(boot_label);
   boot_label = nullptr;
@@ -281,6 +287,8 @@ void Display::hideBootInstructions()
 
 void Display::displayLine1(const char* text)
 {
+  log("line1_label", text);
+
   // Remove existing transcription if present
   if (line1_label) {
     lv_label_set_text(line1_label, text);
@@ -297,6 +305,7 @@ void Display::displayLine1(const char* text)
 
 void Display::displayLine2(const char* text)
 {
+  log("line2_label", text);
   // Remove existing transcription if present
   if (line2_label) {
     lv_label_set_text(line2_label, text);
@@ -313,6 +322,7 @@ void Display::displayLine2(const char* text)
 
 void Display::clearLines()
 {
+  log("clearLines", "(Clear)");
   if (line1_label) {
     lv_obj_del(line1_label);
     line1_label = nullptr;
@@ -329,5 +339,18 @@ void Display::clearLines()
 // Handle routine display tasks
 void Display::routine(void)
 {
+  static uint32_t last_tick_ms = 0;
+  const uint32_t now_ms = millis();
+
+  if (last_tick_ms == 0) {
+    last_tick_ms = now_ms;
+  }
+
+  const uint32_t elapsed_ms = now_ms - last_tick_ms;
+  if (elapsed_ms > 0) {
+    lv_tick_inc(elapsed_ms);
+    last_tick_ms = now_ms;
+  }
+
   lv_task_handler(); // Handle LVGL tasks
 }
