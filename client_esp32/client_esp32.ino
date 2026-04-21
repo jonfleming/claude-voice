@@ -92,7 +92,6 @@ volatile bool claude_ws_connecting = false;
 volatile bool resume_recorder_after_response = false;
 volatile unsigned long response_done_ms = 0;
 volatile unsigned long last_audio_payload_ms = 0;
-volatile bool response_audio_seen = false;
 
 void request_showBootInstructions(const char *text) {
   if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
@@ -262,15 +261,8 @@ void handle_claude_ws_json(const String &json) {
   } else if (type == "done") {
     if (!button_abort) {
       Serial.println("\n[WS] Response complete.");
-      // Defer recorder restart until playback has actually gone idle.
       resume_recorder_after_response = true;
       response_done_ms = millis();
-      if (!response_audio_seen && player_task_handle == NULL) {
-        request_display_line1("Generating response...");
-      } else {
-        request_display_line1("Playing response...");
-      }
-      request_display_line2("");
     }
   } else if (type == "error") {
     String err = extract_json_string_value(json, "content");
@@ -294,9 +286,6 @@ void claude_ws_on_message(WebsocketsMessage message) {
     if (!payload.empty()) {
       Serial.printf("[WS] Received binary audio payload: %u bytes\n", (unsigned)payload.size());
       last_audio_payload_ms = millis();
-      response_audio_seen = true;
-      request_display_line1("Playing response...");
-      request_display_line2("");
       player_task_handle = (TaskHandle_t)1;
       
       const uint8_t *data = (const uint8_t *)payload.data();
@@ -591,13 +580,13 @@ void handle_button_events() {
         button_abort = true; // Signal to stop any ongoing playback
       }
       resume_recorder_after_response = false;
-      response_audio_seen = false;
+      last_audio_payload_ms = 0;
       request_showBootInstructions("Press button to start a conversation.");
     } else {
       // Start a new conversation
       button_abort = false;
       resume_recorder_after_response = false;
-      response_audio_seen = false;
+      last_audio_payload_ms = 0;
       Serial.println("[Button] Starting continuous listening...");
       request_hideBootInstructions();
       start_recorder_task();
@@ -622,8 +611,24 @@ void loop() {
   // if (loop_counter % 10 == 0) {
   //   Serial.println("[Loop] Running main loop tasks..."); // Debug print every 10 loops
   // }
+  // Boot-show/hide must be processed BEFORE line updates so that line labels
+  // are positioned correctly (top-aligned vs. below-banner) from the moment
+  // they are first created.
+  if (display_boot_show_pending) {
+    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
+    char tmp3[128];
+    strncpy(tmp3, display_boot_buf, sizeof(tmp3));
+    display_boot_show_pending = false;
+    if (display_mutex) xSemaphoreGive(display_mutex);
+    display.showBootInstructions(tmp3);
+  } else if (display_boot_hide_pending) {
+    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
+    display_boot_hide_pending = false;
+    if (display_mutex) xSemaphoreGive(display_mutex);
+    display.hideBootInstructions();
+  }
   if (display_line1_pending) {
-    Serial.printf("[Loop] line1: %s  line2: %s\n", display_line1_buf, display_line2_buf); // Debug print current display buffers
+    Serial.printf("[Loop] line1: %s  line2: %s\n", display_line1_buf, display_line2_buf);
     if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
     char tmp[128];
     strncpy(tmp, display_line1_buf, sizeof(tmp));
@@ -638,19 +643,6 @@ void loop() {
     display_line2_pending = false;
     if (display_mutex) xSemaphoreGive(display_mutex);
     display.displayLine2(tmp2);
-  }
-  if (display_boot_show_pending) {
-    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
-    char tmp3[128];
-    strncpy(tmp3, display_boot_buf, sizeof(tmp3));
-    display_boot_show_pending = false;
-    if (display_mutex) xSemaphoreGive(display_mutex);
-    display.showBootInstructions(tmp3);
-  } else if (display_boot_hide_pending) {
-    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
-    display_boot_hide_pending = false;
-    if (display_mutex) xSemaphoreGive(display_mutex);
-    display.hideBootInstructions();
   }
   if (display_clear_pending) {
     if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
@@ -668,7 +660,6 @@ void loop() {
 
     if (player_idle && playback_quiet && done_settled) {
       resume_recorder_after_response = false;
-      response_audio_seen = false;
       request_display_line1("Resume recording...");
       request_display_line2("");
       start_recorder_task();
