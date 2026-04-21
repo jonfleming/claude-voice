@@ -54,6 +54,8 @@ Board config: `esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=huge_app,PSRAM=o
 - **Never mix Freenove/Espressif libraries** - incompatible APIs
 - Background tasks must NOT call LVGL directly - use thread-safe request buffers (e.g., `display_line1_buf`)
 - Display updates require taking `display_mutex` from background tasks
+- Button press while listening or playing is a hard stop: return to boot prompt and idle state
+- While idle, ignore stale in-flight backend conversation messages/audio until next explicit start press
 - PSRAM used for audio buffer (4MB)
 - Zero-copy JSON parsing to minimize heap fragmentation
 - Board config uses PSRAM=opi (OPI mode for external PSRAM)

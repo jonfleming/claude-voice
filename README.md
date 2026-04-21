@@ -107,6 +107,7 @@ A standalone hardware client located in `client_esp32/`.
 - **Streaming**: Streams I2S microphone data (16-bit, 16kHz mono) directly to the server.
 - **Efficient Playback**: Supports raw binary audio frames for low-latency playback via I2S.
 - **Display**: Real-time status ("Transcribing...", "Speaking...") and transcript display.
+- **Button Behavior**: If the button is pressed while listening or playing audio, the client performs a hard stop, returns to boot state (`Press button to start a conversation.`), and ignores stale in-flight backend audio/messages until the next explicit start press.
 - **Volume Control**: Software-based volume scaling for DACs without hardware controls.
 - **Setup**: 
   - Open `client_esp32/client_esp32.ino` in Arduino IDE.

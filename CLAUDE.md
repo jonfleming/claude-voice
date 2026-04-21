@@ -79,6 +79,10 @@ Connect to `ws://localhost:8080/ws`
   - `transcribe_audio()`: STT using faster-whisper
   - `stream_to_ollama()`: LLM integration with streaming TTS
   - `text_to_speech()`: TTS using Piper
+- **ESP32 client state model**:
+  - Button press while listening or playing is a hard stop to boot/idle state.
+  - In idle state, stale in-flight conversation audio/messages from backend are ignored.
+  - A new conversation starts only on an explicit new button press.
 
 - **requirements.txt**: Python dependencies
 - **.env**: Configuration

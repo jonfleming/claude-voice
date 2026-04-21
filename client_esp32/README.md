@@ -37,11 +37,12 @@ A standalone hardware client for the Voice AI Pipeline, designed for ESP32 devel
 
 ## Features
 
-- **Push-to-Talk**: Press the button to start listening. Press again to stop and trigger transcription.
+- **Push-to-Talk / Hard Stop**: Press the button to start listening. If pressed again while listening or while response audio is playing, the client immediately stops all activity, returns to boot state (`Press button to start a conversation.`), and waits for a new start press.
 - **Streaming Audio**: Records at 32kHz (downsampled to 16kHz) and streams raw PCM directly to the server.
 - **Binary Playback**: Receives raw binary audio frames from the server for high-performance, low-latency playback.
 - **Software Volume Scaling**: Integrated volume control (0-21) with software-based sample scaling for DACs that lack hardware volume registers.
 - **Real-time Display**: Shows transcriptions as they happen and updates status messages based on server events (`transcribing`, `done`, `error`).
+- **Idle-State Guarding**: After a hard stop, stale in-flight backend conversation messages and audio payloads are ignored until the next explicit start.
 
 ## Technical Implementation
 
