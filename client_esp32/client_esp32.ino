@@ -95,6 +95,7 @@ volatile unsigned long last_audio_payload_ms = 0;
 volatile bool response_done_received = false;
 volatile bool response_audio_seen = false;
 volatile bool response_audio_done_received = false;
+volatile bool conversation_active = false;
 
 void request_showBootInstructions(const char *text) {
   if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
@@ -234,6 +235,16 @@ void handle_claude_ws_json(const String &json) {
     return;
   }
 
+  // Ignore stale backend conversation messages when the user has explicitly
+  // returned to idle boot state.
+  if (!conversation_active &&
+      (type == "text" || type == "response" || type == "audio" ||
+       type == "stop_recording" || type == "transcribing" ||
+       type == "done" || type == "audio_done")) {
+    Serial.printf("[WS] Ignoring '%s' while idle\n", type.c_str());
+    return;
+  }
+
   if (type == "text") {
     String text = extract_json_string_value(json, "content");
     text.trim();
@@ -244,12 +255,12 @@ void handle_claude_ws_json(const String &json) {
       request_display_line2("Generating response...");
     }
   } else if (type == "response") {
-    String token = extract_json_string_value(json, "content");
-    // Do NOT trim token here; Ollama often sends tokens with leading/trailing spaces
-    if (token.length() > 0) {
-      Serial.print(token);
-      request_display_line2(token.c_str());
-    }
+    // String token = extract_json_string_value(json, "content");
+    // // Do NOT trim token here; Ollama often sends tokens with leading/trailing spaces
+    // if (token.length() > 0) {
+    //   Serial.print(token);
+    //   request_display_line2(token.c_str());
+    // }
   } else if (type == "audio") {
     // We now prefer raw binary audio frames (handled in on_message) for efficiency.
     // Skip JSON-encoded audio to avoid double-playing.
@@ -262,14 +273,14 @@ void handle_claude_ws_json(const String &json) {
     request_display_line1("Transcribing...");
     request_display_line2("");
   } else if (type == "done") {
-    if (!button_abort) {
+    if (!button_abort && conversation_active) {
       Serial.println("\n[WS] Response complete.");
       response_done_received = true;
       resume_recorder_after_response = true;
       response_done_ms = millis();
     }
   } else if (type == "audio_done") {
-    if (!button_abort) {
+    if (!button_abort && conversation_active) {
       Serial.println("[WS] Response audio complete.");
       response_audio_done_received = true;
       resume_recorder_after_response = true;
@@ -288,8 +299,8 @@ void handle_claude_ws_json(const String &json) {
 
 void claude_ws_on_message(WebsocketsMessage message) {
   if (message.isBinary()) {
-    if(button_abort) {
-      Serial.println("[WS] Received audio payload but button abort is active; ignoring.");
+    if (button_abort || !conversation_active) {
+      Serial.println("[WS] Received audio payload while idle/aborted; ignoring.");
       return;
     }
     std::string payload = message.rawData();
@@ -531,13 +542,13 @@ void loop_task_sound_recorder(void *pvParameters) {
   }
 
   Serial.println("[Recorder] loop_task_sound_recorder stop...");
-  if (!button_abort) {
+  if (!button_abort && conversation_active) {
     request_display_line1("Generating response...");
     request_display_line2("");
   }
   
   // Signal backend that we are done sending audio and want transcription
-  if (claude_ws_connected) {
+  if (claude_ws_connected && !button_abort && conversation_active) {
     claude_ws_send_transcribe();
   }
   
@@ -583,6 +594,8 @@ void handle_button_events() {
   if (button_state == Button::KEY_STATE_PRESSED && last_button_state_for_toggle != Button::KEY_STATE_PRESSED) {
     // If either recorder or player is running, stop them
     if (recorder_task_handle != NULL || player_task_handle != NULL) {
+      conversation_active = false;
+      button_abort = true;
       if (recorder_task_handle != NULL) {
         Serial.println("[Button] Stopping listening...");
         stop_recorder_task();
@@ -593,21 +606,20 @@ void handle_button_events() {
         stop_player_task();
         i2s_output_stream_end();
       }
-      // Only set button_abort when actively aborting playback. Do NOT set
-      // it when stopping the recorder so that the device can still accept
-      // the TTS response coming back from the server after manual stop.
-      if (was_player_running) {
-        button_abort = true; // Signal to stop any ongoing playback
-      }
       resume_recorder_after_response = false;
       response_done_received = false;
       response_audio_seen = false;
       response_audio_done_received = false;
       last_audio_payload_ms = 0;
+      if (!was_player_running) {
+        stop_player_task();
+      }
+      request_clear_lines();
       request_showBootInstructions("Press button to start a conversation.");
     } else {
       // Start a new conversation
       button_abort = false;
+      conversation_active = true;
       resume_recorder_after_response = false;
       response_done_received = false;
       response_audio_seen = false;
@@ -679,7 +691,7 @@ void loop() {
   display.routine(); 
 
   // Keep UI/state in response mode until backend confirms all audio is done.
-  if (resume_recorder_after_response && !button_abort) {
+  if (resume_recorder_after_response && !button_abort && conversation_active) {
     unsigned long now = millis();
     bool player_idle = (player_task_handle == NULL);
     bool done_settled = response_done_received && (now - response_done_ms > 120);
@@ -702,7 +714,7 @@ void loop() {
       response_done_received = false;
       response_audio_seen = false;
       response_audio_done_received = false;
-      request_display_line1("Resume recording...");
+      request_display_line1("Please wait. Turning on microphone...");
       request_display_line2("");
       start_recorder_task();
     }
