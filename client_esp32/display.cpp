@@ -28,6 +28,56 @@ Button button(BUTTON_PIN);
 // Display instance
 Display display;
 
+namespace {
+
+int get_logical_screen_width()
+{
+  lv_disp_t *disp = lv_disp_get_default();
+  if (!disp) {
+    return screenWidth;
+  }
+  return lv_disp_get_hor_res(disp);
+}
+
+void layout_display_labels(Display &display_instance)
+{
+  const int logical_width = get_logical_screen_width();
+  const int margin = 12;
+  const int content_width = logical_width > (margin * 2) ? logical_width - (margin * 2) : logical_width;
+
+  if (display_instance.boot_label) {
+    lv_obj_set_width(display_instance.boot_label, logical_width);
+    lv_obj_align(display_instance.boot_label, LV_ALIGN_TOP_MID, 0, 6);
+  }
+
+  if (display_instance.line1_label) {
+    lv_obj_set_width(display_instance.line1_label, content_width);
+    if (display_instance.boot_label) {
+      lv_obj_align_to(display_instance.line1_label, display_instance.boot_label,
+        LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+    } else {
+      lv_obj_align(display_instance.line1_label, LV_ALIGN_TOP_MID, 0, 12);
+    }
+  }
+
+  if (display_instance.line2_label) {
+    lv_obj_set_width(display_instance.line2_label, content_width);
+    if (display_instance.line1_label) {
+      lv_obj_align_to(display_instance.line2_label, display_instance.line1_label,
+        LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+    } else if (display_instance.boot_label) {
+      lv_obj_align_to(display_instance.line2_label, display_instance.boot_label,
+        LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+    } else {
+      lv_obj_align(display_instance.line2_label, LV_ALIGN_TOP_MID, 0, 12);
+    }
+  }
+
+  lv_obj_invalidate(lv_scr_act());
+}
+
+} // namespace
+
 #if LV_USE_LOG != 0
 /* Serial debugging */
 void my_print(const char *buf)
@@ -209,15 +259,16 @@ void Display::showBootInstructions(const char* text)
   if (boot_label) {
     lv_label_set_text(boot_label, text);
     lv_obj_clear_flag(boot_label, LV_OBJ_FLAG_HIDDEN);
+    layout_display_labels(*this);
     return;
   }
 
   // Create a label on the active screen and save the pointer
   boot_label = lv_label_create(lv_scr_act());
+  lv_label_set_long_mode(boot_label, LV_LABEL_LONG_WRAP);
   lv_label_set_text(boot_label, text);
-  lv_obj_set_width(boot_label, screenWidth);
   lv_obj_set_style_text_align(boot_label, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(boot_label, LV_ALIGN_TOP_MID, 0, 6);
+  layout_display_labels(*this);
 }
 
 void Display::hideBootInstructions()
@@ -225,6 +276,7 @@ void Display::hideBootInstructions()
   if (!boot_label) return;
   lv_obj_del(boot_label);
   boot_label = nullptr;
+  layout_display_labels(*this);
 }
 
 void Display::displayLine1(const char* text)
@@ -232,22 +284,15 @@ void Display::displayLine1(const char* text)
   // Remove existing transcription if present
   if (line1_label) {
     lv_label_set_text(line1_label, text);
+    layout_display_labels(*this);
     return;
   }
 
   // Create label, enable wrapping, and position below the boot label (or near top)
   line1_label = lv_label_create(lv_scr_act());
   lv_label_set_long_mode(line1_label, LV_LABEL_LONG_WRAP);
-  // Allow some horizontal margin
-  int margin = 12;
-  lv_obj_set_width(line1_label, screenWidth - margin * 2);
   lv_label_set_text(line1_label, text);
-
-  if (boot_label) {
-    lv_obj_align_to(line1_label, boot_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
-  } else {
-    lv_obj_align(line1_label, LV_ALIGN_TOP_MID, 0, 36);
-  }
+  layout_display_labels(*this);
 }
 
 void Display::displayLine2(const char* text)
@@ -255,25 +300,15 @@ void Display::displayLine2(const char* text)
   // Remove existing transcription if present
   if (line2_label) {
     lv_label_set_text(line2_label, text);
-    // re-align because the height may have changed after updating text
-    if (line1_label) lv_obj_align_to(line2_label, line1_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+    layout_display_labels(*this);
     return;
   }
 
   // Create label, enable wrapping, and position below line1_label (or near top)
   line2_label = lv_label_create(lv_scr_act());
   lv_label_set_long_mode(line2_label, LV_LABEL_LONG_WRAP);
-  int margin = 12;
-  lv_obj_set_width(line2_label, screenWidth - margin * 2);
   lv_label_set_text(line2_label, text);
-
-  if (line1_label) {
-    // place line2 just below line1 with 6px spacing
-    lv_obj_align_to(line2_label, line1_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
-  } else {
-    // fallback position if line1 doesn't exist
-    lv_obj_align(line2_label, LV_ALIGN_TOP_MID, 0, 60);
-  }
+  layout_display_labels(*this);
 }
 
 void Display::clearLines()
@@ -287,6 +322,8 @@ void Display::clearLines()
     lv_obj_del(line2_label);
     line2_label = nullptr;
   }
+
+  layout_display_labels(*this);
 }
 
 // Handle routine display tasks

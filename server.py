@@ -50,7 +50,7 @@ VAD_MIN_SPEECH = float(os.getenv("VAD_MIN_SPEECH", "0.3"))
 VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.005"))
 WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.getenv("WS_PORT", "8080"))
-HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://192.168.48.45:8888")
+HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://100.111.132.40:8888")
 HINDSIGHT_BANK = os.getenv("HINDSIGHT_BANK", "default")
 
 # Global models (loaded once)
@@ -566,7 +566,7 @@ async def handle_websocket(websocket: WebSocket):
 
         # Transcription Gate: Check if the overall energy is high enough to be real speech
         total_rms = get_rms(audio_data)
-        if not force and total_rms < VAD_ENERGY_THRESHOLD * 1.2:
+        if not force and total_rms < audio_buffer.energy_threshold * 1.2:
             log(f"[VAD] Ignoring low-energy segment (RMS: {total_rms:.4f})")
             audio_buffer.clear()
             return
@@ -584,7 +584,7 @@ async def handle_websocket(websocket: WebSocket):
 
             # Hallucination Filter: Whisper often hallucinations common phrases on noise
             hallucinations = ["thank", "you", "thanks for watching", "bye", "subscrib"]
-            if text and any(h in text.lower() for h in hallucinations) and total_rms < VAD_ENERGY_THRESHOLD * 2.0:
+            if text and any(h in text.lower() for h in hallucinations) and total_rms < audio_buffer.energy_threshold * 2.0:
                 log(f"[STT] Filtered hallucination: {text}")
                 text = ""
 
@@ -679,7 +679,7 @@ async def handle_websocket(websocket: WebSocket):
                 # Periodic RMS logging for calibration (every 2 seconds)
                 if current_time - last_rms_log_time > 2.0:
                     rms = get_rms(audio_chunk)
-                    log(f"[Audio] Current RMS: {rms:.5f} (Threshold: {VAD_ENERGY_THRESHOLD})")
+                    log(f"[Audio] Current RMS: {rms:.5f} (Threshold: {audio_buffer.energy_threshold:.5f})")
                     last_rms_log_time = current_time
 
                 # Check VAD after each chunk (handles continuous streaming)
@@ -748,6 +748,11 @@ async def get_index():
 
             <div style="margin-bottom: 20px;">
                 <label><input type="checkbox" id="debugToggle"> Show Debug Options (File Upload)</label>
+                <div class="debug-only" style="margin-top: 10px;">
+                    <label for="vadEnergyThreshold">VAD Energy Threshold:</label>
+                    <input type="number" id="vadEnergyThreshold" min="0.0001" max="1.0" step="0.0001" value="0.005" style="width: 100px; margin-left: 8px;">
+                    <button id="applyVadBtn" type="button">Apply</button>
+                </div>
             </div>
 
             <h2>1. Input Source</h2>
@@ -815,9 +820,27 @@ async def get_index():
                 const micStartBtn = document.getElementById('micStartBtn');
                 const micStopBtn = document.getElementById('micStopBtn');
                 const micStatus = document.getElementById('micStatus');
+                const vadEnergyThresholdInput = document.getElementById('vadEnergyThreshold');
+                const applyVadBtn = document.getElementById('applyVadBtn');
                 const audioPlayer = document.getElementById('audioPlayer');
                 const visualizer = document.getElementById('visualizer');
                 const canvasCtx = visualizer.getContext('2d');
+
+                function sendVadConfig() {
+                    const value = parseFloat(vadEnergyThresholdInput.value);
+                    if (!Number.isFinite(value) || value <= 0 || value >= 1.0) {
+                        addLog('[Config] Invalid VAD energy threshold. Use a value between 0 and 1.0');
+                        return;
+                    }
+
+                    if (!ws || ws.readyState !== WebSocket.OPEN) {
+                        addLog('[Config] Connect first to apply VAD energy threshold');
+                        return;
+                    }
+
+                    ws.send(JSON.stringify({ type: 'config', energy_threshold: value }));
+                    addLog('[Config] Applied VAD energy threshold: ' + value.toFixed(4));
+                }
 
                 function addLog(msg) {
                     log.textContent += msg + '\\n';
@@ -862,6 +885,7 @@ async def get_index():
                         sendBtn.disabled = false;
                         transcribeBtn.disabled = false;
                         addLog('[WS] Connected');
+                        sendVadConfig();
                     };
 
                     ws.onclose = () => {
@@ -955,6 +979,16 @@ async def get_index():
                     }
                     addLog('[WS] Sending force transcribe request');
                     ws.send(JSON.stringify({type: "transcribe"}));
+                };
+
+                applyVadBtn.onclick = () => {
+                    sendVadConfig();
+                };
+
+                vadEnergyThresholdInput.onkeydown = (event) => {
+                    if (event.key === 'Enter') {
+                        sendVadConfig();
+                    }
                 };
 
                 // Microphone handling

@@ -88,6 +88,12 @@ WebsocketsClient claude_ws_client;
 volatile bool claude_ws_connected = false;
 volatile bool claude_ws_connecting = false;
 
+// Coordinate backend "done" with actual audio playback completion.
+volatile bool resume_recorder_after_response = false;
+volatile unsigned long response_done_ms = 0;
+volatile unsigned long last_audio_payload_ms = 0;
+volatile bool response_audio_seen = false;
+
 void request_showBootInstructions(const char *text) {
   if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
   strncpy(display_boot_buf, text, sizeof(display_boot_buf)-1);
@@ -256,9 +262,15 @@ void handle_claude_ws_json(const String &json) {
   } else if (type == "done") {
     if (!button_abort) {
       Serial.println("\n[WS] Response complete.");
-      request_display_line1("Resume recording...");
+      // Defer recorder restart until playback has actually gone idle.
+      resume_recorder_after_response = true;
+      response_done_ms = millis();
+      if (!response_audio_seen && player_task_handle == NULL) {
+        request_display_line1("Generating response...");
+      } else {
+        request_display_line1("Playing response...");
+      }
       request_display_line2("");
-      start_recorder_task();
     }
   } else if (type == "error") {
     String err = extract_json_string_value(json, "content");
@@ -281,6 +293,10 @@ void claude_ws_on_message(WebsocketsMessage message) {
     std::string payload = message.rawData();
     if (!payload.empty()) {
       Serial.printf("[WS] Received binary audio payload: %u bytes\n", (unsigned)payload.size());
+      last_audio_payload_ms = millis();
+      response_audio_seen = true;
+      request_display_line1("Playing response...");
+      request_display_line2("");
       player_task_handle = (TaskHandle_t)1;
       
       const uint8_t *data = (const uint8_t *)payload.data();
@@ -473,7 +489,18 @@ void loop_task_sound_recorder(void *pvParameters) {
   request_display_line2("");
 
   while (!stop_requested && recorder_task_handle != NULL) {
+    // Do not touch the input channel while playback is active.
+    // Playback can reconfigure I2S and momentarily leave RX disabled.
+    if (player_task_handle != NULL) {
+      vTaskDelay(10 / portTICK_PERIOD_MS);
+      continue;
+    }
+
     int iis_buffer_size = audio_input_get_iis_data_available();
+    if (iis_buffer_size <= 0) {
+      vTaskDelay(2 / portTICK_PERIOD_MS);
+      continue;
+    }
     
     int processed = 0;
     while (iis_buffer_size > 0 && processed < 4096) {
@@ -485,13 +512,6 @@ void loop_task_sound_recorder(void *pvParameters) {
       
       int real_size = audio_input_read_iis_data((char *)input_chunk, sizeof(input_chunk));
       if (real_size <= 0) break;
-      
-      // Mute: Discard audio if player is active
-      if (player_task_handle != NULL) {
-         iis_buffer_size -= real_size;
-         processed += real_size;
-         continue; 
-      }
 
       size_t pcm_size = convert_input_to_backend_pcm(input_chunk, real_size, backend_chunk, sizeof(backend_chunk));
       if (pcm_size > 0) {
@@ -570,10 +590,14 @@ void handle_button_events() {
       if (was_player_running) {
         button_abort = true; // Signal to stop any ongoing playback
       }
+      resume_recorder_after_response = false;
+      response_audio_seen = false;
       request_showBootInstructions("Press button to start a conversation.");
     } else {
       // Start a new conversation
       button_abort = false;
+      resume_recorder_after_response = false;
+      response_audio_seen = false;
       Serial.println("[Button] Starting continuous listening...");
       request_hideBootInstructions();
       start_recorder_task();
@@ -591,9 +615,15 @@ void loop_task_button_handler(void *pvParameters) {
 }
 
 // Main loop function that runs continuously
+int loop_counter = 0;
 void loop() {
   // Apply any pending display requests from background tasks
+  // loop_counter++;
+  // if (loop_counter % 10 == 0) {
+  //   Serial.println("[Loop] Running main loop tasks..."); // Debug print every 10 loops
+  // }
   if (display_line1_pending) {
+    Serial.printf("[Loop] line1: %s  line2: %s\n", display_line1_buf, display_line2_buf); // Debug print current display buffers
     if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
     char tmp[128];
     strncpy(tmp, display_line1_buf, sizeof(tmp));
@@ -629,6 +659,22 @@ void loop() {
     display.clearLines();
   }
   display.routine(); 
+
+  if (resume_recorder_after_response && !button_abort) {
+    unsigned long now = millis();
+    bool player_idle = (player_task_handle == NULL);
+    bool playback_quiet = (last_audio_payload_ms == 0) || (now - last_audio_payload_ms > 300);
+    bool done_settled = (now - response_done_ms > 120);
+
+    if (player_idle && playback_quiet && done_settled) {
+      resume_recorder_after_response = false;
+      response_audio_seen = false;
+      request_display_line1("Resume recording...");
+      request_display_line2("");
+      start_recorder_task();
+    }
+  }
+
   // Keep websocket alive and process backend messages.
   claude_ws_poll();
   // Light reconnect policy while idle.
