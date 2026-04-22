@@ -46,10 +46,13 @@ SemaphoreHandle_t ws_mutex = NULL;
 #define MOLLOC_SIZE (4 * 1024 * 1024)
 
 // ---------- WiFi / Server configuration (edit before upload) ----------
-#define WIFI_SSID "FLEMING_2"
-#define WIFI_PASS "90130762"
-// The server that runs your transcription/TTS services (Raspberry Pi IP)
-#define SERVER_IP "192.168.0.108"
+//#define WIFI_SSID "FLEMING_2"
+//#define WIFI_PASS "90130762"
+#define WIFI_SSID "GL-SFT1200-3e1"
+#define WIFI_PASS "goodlife"
+
+// The server that runs your transcription/TTS services (Pi Tailnet Bridge)
+#define SERVER_IP "192.168.8.133"
 #define CLAUDE_VOICE_WS_PORT 8080
 #define CLAUDE_VOICE_WS_PATH "/ws"
 
@@ -340,7 +343,7 @@ void claude_ws_on_event(WebsocketsEvent event, String data) {
     claude_ws_connected = true;
     claude_ws_connecting = false;
     Serial.println("[WS] Connection opened");
-    request_display_line2("Connected");
+    request_display_line2("Connected using GL router");
   } else if (event == WebsocketsEvent::ConnectionClosed) {
     claude_ws_connected = false;
     claude_ws_connecting = false;
