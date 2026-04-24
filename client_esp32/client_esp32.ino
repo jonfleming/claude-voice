@@ -504,6 +504,8 @@ void loop_task_sound_recorder(void *pvParameters) {
   response_audio_done_received = false;
   last_audio_payload_ms = 0;
   Serial.println("Listening...");
+  // Brief delay to allow UI to update before showing listening state
+  vTaskDelay(100 / portTICK_PERIOD_MS);
   request_display_line1("Listening...");
   request_display_line2("");
 
@@ -708,7 +710,8 @@ void loop() {
         : (now - response_done_ms > 2500);
     }
 
-    if (!audio_done || !player_idle) {
+    // Show playing response only after audio playback has started
+    if (!audio_done && response_audio_seen) {
       request_display_line1("Playing response...");
     }
 
