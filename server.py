@@ -89,7 +89,7 @@ VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.005"))
 WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.getenv("WS_PORT", "8080"))
 HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://100.111.132.40:8888")
-HINDSIGHT_BANK = os.getenv("HINDSIGHT_BANK", "default")
+HINDSIGHT_BANK = os.getenv("HINDSIGHT_BANK", "amicus-2026")
 
 # Global models (loaded once)
 whisper_model: Optional[WhisperModel] = None
@@ -512,7 +512,7 @@ class AudioBuffer:
         if rms < self.energy_threshold:
             # accumulate silence
             self.silent_duration += duration
-            log(f"[VAD-Window] RMS: {rms:.5f} (silence), +{duration:.3f}s -> silent_duration={self.silent_duration:.3f}s")
+            # log(f"[VAD-Window] RMS: {rms:.5f} (silence), +{duration:.3f}s -> silent_duration={self.silent_duration:.3f}s")
         else:
             # Speech detected
             if self.speech_start_time is None:
@@ -520,7 +520,8 @@ class AudioBuffer:
                 self.speech_start_time = current_time
             else:
                 # Update speech presence (useful for long speech segments)
-                log(f"[VAD-Window] RMS: {rms:.5f} (speech), silent_duration reset")
+                # log(f"[VAD-Window] RMS: {rms:.5f} (speech), silent_duration reset")
+                pass
             self.silent_duration = 0.0
 
     def add_silence(self, duration: float):
@@ -660,6 +661,7 @@ async def handle_websocket(websocket: WebSocket):
                             )
                         }
                         messages = [system_msg, {"role": "user", "content": text}]
+                        log(f"[Hindsight] Included memories in context for LLM:\n{context_prompt}")
                     else:
                         log("[Hindsight] No memories found for query; proceeding without context")
                         messages = [
@@ -1177,11 +1179,14 @@ async def get_index():
 def main():
     """Run the server."""
     print(f"Starting Voice AI Pipeline server on {WS_HOST}:{WS_PORT}")
+    # Disable automatic WebSocket keepalive pings to avoid ping/pong assertion errors
     uvicorn.run(
         "server:app",
         host=WS_HOST,
         port=WS_PORT,
         reload=False,
+        ws_ping_interval=None,
+        ws_ping_timeout=None,
     )
 
 

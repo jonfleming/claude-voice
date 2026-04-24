@@ -312,6 +312,7 @@ void claude_ws_on_message(WebsocketsMessage message) {
       response_audio_seen = true;
       last_audio_payload_ms = millis();
       request_display_line1("Playing response...");
+      request_display_line2("");
       player_task_handle = (TaskHandle_t)1;
       
       const uint8_t *data = (const uint8_t *)payload.data();
@@ -713,6 +714,7 @@ void loop() {
     // Show playing response only after audio playback has started
     if (!audio_done && response_audio_seen) {
       request_display_line1("Playing response...");
+      request_display_line2("");
     }
 
     if (player_idle && audio_done && done_settled) {
