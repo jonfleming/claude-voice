@@ -18,14 +18,52 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-import aiohttp
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
 import numpy as np
-import uvicorn
-from dotenv import load_dotenv
-from faster_whisper import WhisperModel
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
-from hindsight_client import Hindsight
+try:
+    import uvicorn
+except ImportError:
+    uvicorn = None
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    # dotenv is optional; define no-op if unavailable
+    def load_dotenv():
+        pass
+try:
+    from faster_whisper import WhisperModel
+except ImportError:
+    # Whisper STT model is optional
+    WhisperModel = None
+try:
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from fastapi.responses import HTMLResponse
+except ImportError:
+    # FastAPI is optional; define dummy app and placeholders for import-time definitions
+    class DummyApp:
+        def __init__(self, *args, **kwargs):
+            pass
+        def websocket(self, path):
+            def decorator(func):
+                return func
+            return decorator
+        def get(self, path):
+            def decorator(func):
+                return func
+            return decorator
+    FastAPI = DummyApp
+    WebSocket = None
+    WebSocketDisconnect = Exception
+    # Dummy HTMLResponse that returns content directly
+    HTMLResponse = lambda content: content
+try:
+    from hindsight_client import Hindsight
+except ImportError:
+    Hindsight = None
+from prompt_classifier import classify_prompt_type
 
 # Optional Python piper package (preferred over CLI if available)
 try:
@@ -592,31 +630,55 @@ async def handle_websocket(websocket: WebSocket):
             if text:
                 log(f"[STT] {text}")
                 await safe_send_json(websocket, {"type": "text", "content": text})
-                chat_history.append({"role": "user", "content": text})
 
-                # Include any pending memories from previous turn
-                if pending_memories:
-                    context_prompt = "\n".join([f"- {m}" for m in pending_memories])
-                    log(f"[Hindsight] Using {len(pending_memories)} pending memories")
-                    system_msg = {"role": "system", "content": f"Relevant past conversations:\n{context_prompt}\n\nYou are a helpful voice assistant."}
-                    llm_messages = [system_msg] + chat_history
-                    pending_memories.clear()  # Clear after using
+                # Classification: STATEMENT, QUESTION, or QUERY
+                classification = classify_prompt_type(text)
+                log(f"[Classifier] Classified as {classification}")
+
+                # If statement, store in memory but still respond
+                if classification == "STATEMENT":
+                    retained = await retain_memory_async(
+                        text, context="voice conversation", tags=["conversation"]
+                    )
+                    if retained:
+                        log("[Hindsight] Statement memory retained")
+                    else:
+                        log("[Hindsight] Statement memory failed to retain")
+
+                # Prepare messages for LLM
+                if classification == "QUERY":
+                    # Retrieve relevant memories
+                    memories = await recall_memories_async(text, budget="low")
+                    if memories:
+                        log(f"[Hindsight] Retrieved {len(memories)} memories for query")
+                        context_prompt = "\n".join([f"- {m}" for m in memories])
+                        system_msg = {
+                            "role": "system",
+                            "content": (
+                                f"Relevant past conversations:\n{context_prompt}\n\n"
+                                "You are a helpful voice assistant."
+                            )
+                        }
+                        messages = [system_msg, {"role": "user", "content": text}]
+                    else:
+                        log("[Hindsight] No memories found for query; proceeding without context")
+                        messages = [
+                            {"role": "system", "content": "You are a helpful voice assistant."},
+                            {"role": "user", "content": text}
+                        ]
                 else:
-                    llm_messages = chat_history
+                    # General question or statement
+                    messages = [
+                        {"role": "system", "content": "You are a helpful voice assistant."},
+                        {"role": "user", "content": text}
+                    ]
 
-                response = await stream_to_ollama(llm_messages, websocket, tts_queue)
-                chat_history.append({"role": "assistant", "content": response})
+                # Send to Ollama and stream response
+                response = await stream_to_ollama(messages, websocket, tts_queue)
                 await safe_send_json(websocket, {"type": "done", "content": response})
-                # Signal audio completion only after all queued TTS segments are sent.
+                # Ensure all TTS segments are sent
                 await tts_queue.join()
                 await safe_send_json(websocket, {"type": "audio_done"})
-
-                # Queue recall for next turn (fire and forget)
-                asyncio.create_task(queue_recall(text))
-
-                # Store conversation in Hindsight
-                memory_content = f"User: {text}\nAssistant: {response}"
-                await retain_memory_async(memory_content, context="voice conversation", tags=["conversation"])
             else:
                 log("[STT] No meaningful speech detected")
                 await safe_send_json(websocket, {"type": "done", "content": ""})
