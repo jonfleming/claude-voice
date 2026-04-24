@@ -454,10 +454,6 @@ class AudioBuffer:
         self.vad_window_buffer = b""
         self.min_vad_window_bytes = int(self.sample_rate * 0.1 * 2) # 100ms
 
-# ... (I'll skip to handle_websocket to keep it concise but I MUST provide exact strings)
-# Wait, the mandate says DO NOT use placeholders like '...'. I must provide the full block.
-
-
     def add(self, chunk: bytes, current_time: float):
         """Add audio chunk to buffer and update VAD state."""
         self.buffer.append(chunk)
@@ -513,7 +509,7 @@ class AudioBuffer:
 
         # If silence has lasted longer than threshold
         if self.silent_duration >= self.vad_threshold:
-            log(f"[VAD] check_vad: silent_duration={self.silent_duration:.3f}s >= vad_threshold={self.vad_threshold:.3f}s; speech_start_time={self.speech_start_time}")
+            # log(f"[VAD] check_vad: silent_duration={self.silent_duration:.3f}s >= vad_threshold={self.vad_threshold:.3f}s; speech_start_time={self.speech_start_time}")
             # Check we have enough speech duration to care
             if self.speech_start_time is not None and self.last_audio_time is not None:
                 speech_duration = self.last_audio_time - self.speech_start_time

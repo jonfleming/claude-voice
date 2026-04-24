@@ -51,8 +51,8 @@ SemaphoreHandle_t ws_mutex = NULL;
 #define WIFI_SSID "GL-SFT1200-3e1"
 #define WIFI_PASS "goodlife"
 
-// The server that runs your transcription/TTS services (Pi Tailnet Bridge)
-#define SERVER_IP "192.168.8.133"
+// The server that runs your transcription/TTS services (*two* Tailnet Bridge)
+#define SERVER_IP "192.168.8.144"
 #define CLAUDE_VOICE_WS_PORT 8080
 #define CLAUDE_VOICE_WS_PATH "/ws"
 
