@@ -249,7 +249,12 @@ async def transcribe_audio(audio_data: bytes) -> str:
     return text.strip()
 
 
-async def stream_to_ollama(messages: list[dict], websocket: WebSocket, tts_queue: Optional[asyncio.Queue] = None) -> str:
+async def stream_to_ollama(
+    messages: list[dict],
+    websocket: WebSocket,
+    tts_queue: Optional[asyncio.Queue] = None,
+    stop_event: Optional[asyncio.Event] = None,
+) -> str:
     """Send message history to Ollama and stream the response with TTS."""
     global piper_process
 
@@ -279,6 +284,9 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket, tts_queue
                 log(f"[Ollama] Connection successful, streaming chat response...")
 
                 async for line in resp.content:
+                    if stop_event is not None and stop_event.is_set():
+                        log("[Ollama] Stop requested, aborting stream")
+                        return response_text
                     if line:
                         try:
                             data = json.loads(line)
@@ -309,6 +317,9 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket, tts_queue
                                         pending_text = ""
 
                                     if text_segment.strip():
+                                        if stop_event is not None and stop_event.is_set():
+                                            log("[TTS] Stop requested, dropping queued segment")
+                                            return response_text
                                         log(f"[TTS] Enqueuing audio generation for: {text_segment.strip()}")
                                         # Enqueue TTS so a single worker synthesizes/sends in FIFO order
                                         if tts_queue is not None:
@@ -324,13 +335,16 @@ async def stream_to_ollama(messages: list[dict], websocket: WebSocket, tts_queue
 
                 # Generate final TTS for remaining text
                 log(f"[Ollama] Stream ended, generating final TTS for remaining text...")
-                if pending_text.strip():
+                if pending_text.strip() and not (stop_event is not None and stop_event.is_set()):
                     log(f"[TTS] Enqueuing background final audio for: {pending_text.strip()}")
                     if tts_queue is not None:
                         await tts_queue.put(pending_text)
                     else:
                         asyncio.create_task(_generate_and_send_tts(pending_text, websocket))
 
+    except asyncio.CancelledError:
+        log("[Ollama] Stream task cancelled")
+        raise
     except Exception as e:
         log(f"[Ollama] Exception: {e}")
         await safe_send_json(websocket, {
@@ -437,11 +451,20 @@ async def text_to_speech(text: str) -> Optional[bytes]:
         return None
 
 
-async def _generate_and_send_tts(text: str, websocket: WebSocket):
+async def _generate_and_send_tts(
+    text: str,
+    websocket: WebSocket,
+    stop_event: Optional[asyncio.Event] = None,
+):
     """Background helper: synthesize TTS and send to websocket without blocking the LLM stream."""
     try:
+        if stop_event is not None and stop_event.is_set():
+            return
         audio = await text_to_speech(text)
         if not audio:
+            return
+
+        if stop_event is not None and stop_event.is_set():
             return
 
         # Send raw binary first (preferred by embedded clients)
@@ -467,7 +490,13 @@ async def _tts_worker(tts_queue: asyncio.Queue, websocket: WebSocket):
                 tts_queue.task_done()
                 break
             try:
-                await _generate_and_send_tts(text, websocket)
+                if isinstance(text, tuple):
+                    text_value, stop_event = text
+                else:
+                    text_value, stop_event = text, None
+                if stop_event is not None and stop_event.is_set():
+                    continue
+                await _generate_and_send_tts(text_value, websocket, stop_event)
             except Exception as e:
                 log(f"[TTS-Worker] Exception for segment: {e}")
             finally:
@@ -578,6 +607,8 @@ async def handle_websocket(websocket: WebSocket):
     chat_history: list[dict] = []
     pending_memories: list[str] = []  # Memories from previous turn to include
     is_processing = False
+    stop_requested = asyncio.Event()
+    processing_task: Optional[asyncio.Task] = None
     last_rms_log_time = 0
 
     async def queue_recall(query: str):
@@ -588,9 +619,49 @@ async def handle_websocket(websocket: WebSocket):
             pending_memories.extend(memories)
             log(f"[Hindsight] Queued {len(memories)} memories for next turn")
 
+    async def reset_tts_worker():
+        nonlocal tts_queue, tts_worker_task
+
+        while True:
+            try:
+                item = tts_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            else:
+                tts_queue.task_done()
+                if item is None:
+                    break
+
+        if not tts_worker_task.done():
+            tts_worker_task.cancel()
+            try:
+                await tts_worker_task
+            except asyncio.CancelledError:
+                pass
+
+        tts_queue = asyncio.Queue()
+        tts_worker_task = asyncio.create_task(_tts_worker(tts_queue, websocket))
+
+    async def stop_current_processing(reason: str):
+        nonlocal is_processing, processing_task
+
+        stop_requested.set()
+        audio_buffer.clear()
+        log(f"[WS] Stop requested: {reason}")
+
+        if processing_task is not None and not processing_task.done():
+            processing_task.cancel()
+            try:
+                await processing_task
+            except asyncio.CancelledError:
+                pass
+
+        await reset_tts_worker()
+        is_processing = False
+
     async def trigger_transcription(force=False):
         """Helper to trigger transcription and LLM response."""
-        nonlocal is_processing
+        nonlocal is_processing, processing_task
         
         if is_processing and not force:
             return
@@ -607,6 +678,7 @@ async def handle_websocket(websocket: WebSocket):
             return
 
         is_processing = True
+        stop_requested.clear()
         if not force:
             await safe_send_json(websocket, {"type": "stop_recording"})
 
@@ -676,17 +748,34 @@ async def handle_websocket(websocket: WebSocket):
                     ]
 
                 # Send to Ollama and stream response
-                response = await stream_to_ollama(messages, websocket, tts_queue)
+                response = await stream_to_ollama(messages, websocket, tts_queue, stop_requested)
+                if stop_requested.is_set():
+                    log("[WS] Stop requested before final response delivery")
+                    return
                 await safe_send_json(websocket, {"type": "done", "content": response})
                 # Ensure all TTS segments are sent
                 await tts_queue.join()
-                await safe_send_json(websocket, {"type": "audio_done"})
+                if not stop_requested.is_set():
+                    await safe_send_json(websocket, {"type": "audio_done"})
             else:
                 log("[STT] No meaningful speech detected")
-                await safe_send_json(websocket, {"type": "done", "content": ""})
-                await safe_send_json(websocket, {"type": "audio_done"})
+                if not stop_requested.is_set():
+                    await safe_send_json(websocket, {"type": "done", "content": ""})
+                    await safe_send_json(websocket, {"type": "audio_done"})
+        except asyncio.CancelledError:
+            log("[WS] Processing task cancelled")
+            raise
         finally:
             is_processing = False
+            if processing_task is asyncio.current_task():
+                processing_task = None
+
+    def launch_transcription(force: bool = False):
+        nonlocal processing_task
+
+        if is_processing:
+            return
+        processing_task = asyncio.create_task(trigger_transcription(force=force))
 
     try:
         while True:
@@ -698,7 +787,7 @@ async def handle_websocket(websocket: WebSocket):
                 if not is_processing:
                     audio_buffer.add_silence(0.5)
                     if audio_buffer.check_vad():
-                        await trigger_transcription()
+                        launch_transcription()
                 continue
 
             if data.get("type") == "websocket.disconnect":
@@ -716,10 +805,12 @@ async def handle_websocket(websocket: WebSocket):
                 if msg_type == "ping":
                     await safe_send_json(websocket, {"type": "pong"})
                 elif msg_type == "transcribe":
-                    await trigger_transcription(force=True)
+                    launch_transcription(force=True)
                 elif msg_type == "stream":
                     # Force process current buffer
-                    await trigger_transcription(force=True)
+                    launch_transcription(force=True)
+                elif msg_type == "stop":
+                    await stop_current_processing("client requested stop")
                 elif msg_type == "config":
                     # Dynamically update VAD energy threshold for this connection
                     if "energy_threshold" in message:
@@ -753,7 +844,7 @@ async def handle_websocket(websocket: WebSocket):
 
                 # Check VAD after each chunk (handles continuous streaming)
                 if audio_buffer.check_vad():
-                    await trigger_transcription()
+                    launch_transcription()
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
@@ -765,6 +856,12 @@ async def handle_websocket(websocket: WebSocket):
         })
         manager.disconnect(websocket)
     finally:
+        if processing_task is not None and not processing_task.done():
+            processing_task.cancel()
+            try:
+                await processing_task
+            except asyncio.CancelledError:
+                pass
         # Shutdown TTS worker gracefully
         try:
             # enqueue sentinel and wait for worker to finish

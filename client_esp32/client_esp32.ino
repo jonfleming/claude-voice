@@ -17,6 +17,7 @@
 // WiFi + HTTP
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <RemoteDebug.h>
 // Display
 #include "display.h"
 #include <lvgl.h>
@@ -25,6 +26,12 @@
 #include <string>
 
 using namespace websockets;
+
+RemoteDebug Debug;
+
+#define DBG_PRINTLN(msg) Debug.println(msg)
+#define DBG_PRINT(msg) Debug.print(msg)
+#define DBG_PRINTF(...) Debug.printf(__VA_ARGS__)
 
 // Mutex to protect display request buffers
 SemaphoreHandle_t display_mutex = NULL;
@@ -141,6 +148,22 @@ void request_display_line2(const char *text) {
   if (display_mutex) xSemaphoreGive(display_mutex);
 }
 
+bool claude_ws_send_stop() {
+  if (!claude_ws_connected) return false;
+  const char *msg = "{\"type\":\"stop\"}";
+  bool ok = false;
+  if (ws_mutex) xSemaphoreTake(ws_mutex, portMAX_DELAY);
+  ok = claude_ws_client.send(msg);
+  if (ws_mutex) xSemaphoreGive(ws_mutex);
+  if (!ok) {
+    DBG_PRINTLN("[WS] Failed to send stop control message");
+    claude_ws_connected = false;
+    return false;
+  }
+  DBG_PRINTLN("[WS] Sent stop control message");
+  return true;
+}
+
 // Convert I2S input frames (32-bit stereo, 16kHz) to backend format
 // (16-bit mono, 16kHz). This version adds robust DC removal and 
 // higher software gain to significantly improve Whisper accuracy.
@@ -189,14 +212,14 @@ void play_backend_audio_base64(const String &b64_audio) {
   int len_rc = mbedtls_base64_decode(NULL, 0, &decoded_len,
     (const unsigned char *)b64_audio.c_str(), b64_audio.length());
   if (len_rc != 0 && len_rc != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL) {
-    Serial.printf("[WS] base64 length decode failed: %d\n", len_rc);
+    DBG_PRINTF("[WS] base64 length decode failed: %d\n", len_rc);
     return;
   }
   if (decoded_len == 0) return;
 
   uint8_t *decoded = (uint8_t *)malloc(decoded_len);
   if (!decoded) {
-    Serial.println("[WS] Failed to allocate decoded audio buffer");
+    DBG_PRINTLN("[WS] Failed to allocate decoded audio buffer");
     return;
   }
 
@@ -204,7 +227,7 @@ void play_backend_audio_base64(const String &b64_audio) {
   int dec_rc = mbedtls_base64_decode(decoded, decoded_len, &out_len,
     (const unsigned char *)b64_audio.c_str(), b64_audio.length());
   if (dec_rc != 0 || out_len == 0) {
-    Serial.printf("[WS] base64 decode failed: %d\n", dec_rc);
+    DBG_PRINTF("[WS] base64 decode failed: %d\n", dec_rc);
     free(decoded);
     return;
   }
@@ -223,7 +246,7 @@ void play_backend_audio_base64(const String &b64_audio) {
       delay(20);
       i2s_output_stream_end();
     } else {
-      Serial.println("[WS] Failed to initialize I2S stream for backend audio");
+      DBG_PRINTLN("[WS] Failed to initialize I2S stream for backend audio");
     }
   }
 
@@ -234,7 +257,7 @@ void play_backend_audio_base64(const String &b64_audio) {
 void handle_claude_ws_json(const String &json) {
   String type = extract_json_string_value(json, "type");
   if (type.length() == 0) {
-    Serial.printf("[WS] Non-typed message: %s\n", json.c_str());
+    DBG_PRINTF("[WS] Non-typed message: %s\n", json.c_str());
     return;
   }
 
@@ -244,7 +267,7 @@ void handle_claude_ws_json(const String &json) {
       (type == "text" || type == "response" || type == "audio" ||
        type == "stop_recording" || type == "transcribing" ||
        type == "done" || type == "audio_done")) {
-    Serial.printf("[WS] Ignoring '%s' while idle\n", type.c_str());
+    DBG_PRINTF("[WS] Ignoring '%s' while idle\n", type.c_str());
     return;
   }
 
@@ -252,8 +275,8 @@ void handle_claude_ws_json(const String &json) {
     String text = extract_json_string_value(json, "content");
     text.trim();
     if (text.length() > 0) {
-      Serial.println("[WS] Transcription:");
-      Serial.println(text);
+      DBG_PRINTLN("[WS] Transcription:");
+      DBG_PRINTLN(text.c_str());
       request_display_line1(text.c_str());
       request_display_line2("Generating response...");
     }
@@ -267,52 +290,62 @@ void handle_claude_ws_json(const String &json) {
   } else if (type == "audio") {
     // We now prefer raw binary audio frames (handled in on_message) for efficiency.
     // Skip JSON-encoded audio to avoid double-playing.
-    Serial.println("[WS] Skipping JSON audio message (preferring binary)");
+    DBG_PRINTLN("[WS] Skipping JSON audio message (preferring binary)");
   } else if (type == "stop_recording") {
-    Serial.println("[WS] Server requested stop recording (VAD)");
+    DBG_PRINTLN("[WS] Server requested stop recording (VAD)");
     stop_recorder_task();
   } else if (type == "transcribing") {
-    Serial.println("[WS] Transcribing...");
+    DBG_PRINTLN("[WS] Transcribing...");
     request_display_line1("Transcribing...");
     request_display_line2("");
   } else if (type == "done") {
     if (!button_abort && conversation_active) {
-      Serial.println("\n[WS] Response complete.");
+      DBG_PRINTLN("\n[WS] Response complete.");
       response_done_received = true;
       resume_recorder_after_response = true;
       response_done_ms = millis();
     }
   } else if (type == "audio_done") {
     if (!button_abort && conversation_active) {
-      Serial.println("[WS] Response audio complete.");
+      DBG_PRINTLN("[WS] Response audio complete.");
       response_audio_done_received = true;
       resume_recorder_after_response = true;
+      // Drop a stale pending "Playing response..." update that may have been
+      // queued just before audio_done arrived.
+      if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
+      if (display_line1_pending && strcmp(display_line1_buf, "Playing response...") == 0) {
+        display_line1_pending = false;
+      }
+      if (display_mutex) xSemaphoreGive(display_mutex);
     }
   } else if (type == "error") {
     String err = extract_json_string_value(json, "content");
-    Serial.printf("[WS] Backend error: %s\n", err.c_str());
+    DBG_PRINTF("[WS] Backend error: %s\n", err.c_str());
     request_display_line1("Backend error");
     request_display_line2(err.c_str());
   } else if (type == "pong") {
-    Serial.println("[WS] pong");
+    DBG_PRINTLN("[WS] pong");
   } else {
-    Serial.printf("[WS] Unhandled message type '%s'\n", type.c_str());
+    DBG_PRINTF("[WS] Unhandled message type '%s'\n", type.c_str());
   }
 }
 
 void claude_ws_on_message(WebsocketsMessage message) {
   if (message.isBinary()) {
     if (button_abort || !conversation_active) {
-      Serial.println("[WS] Received audio payload while idle/aborted; ignoring.");
+      DBG_PRINTLN("[WS] Received audio payload while idle/aborted; ignoring.");
+      claude_ws_send_stop();
       return;
     }
     std::string payload = message.rawData();
     if (!payload.empty()) {
-      Serial.printf("[WS] Received binary audio payload: %u bytes\n", (unsigned)payload.size());
+      DBG_PRINTF("[WS] Received binary audio payload: %u bytes\n", (unsigned)payload.size());
       response_audio_seen = true;
       last_audio_payload_ms = millis();
-      request_display_line1("Playing response...");
-      request_display_line2("");
+      if (!response_audio_done_received) {
+        request_display_line1("Playing response...");
+        request_display_line2("");
+      }
       player_task_handle = (TaskHandle_t)1;
       
       const uint8_t *data = (const uint8_t *)payload.data();
@@ -343,29 +376,29 @@ void claude_ws_on_event(WebsocketsEvent event, String data) {
   if (event == WebsocketsEvent::ConnectionOpened) {
     claude_ws_connected = true;
     claude_ws_connecting = false;
-    Serial.println("[WS] Connection opened");
+    DBG_PRINTLN("[WS] Connection opened");
     request_display_line2("Connected using GL router");
   } else if (event == WebsocketsEvent::ConnectionClosed) {
     claude_ws_connected = false;
     claude_ws_connecting = false;
-    Serial.printf("[WS] Connection closed: %s\n", data.c_str());
+    DBG_PRINTF("[WS] Connection closed: %s\n", data.c_str());
     request_display_line2("Disconnected");
   } else if (event == WebsocketsEvent::GotPing) {
-    Serial.println("[WS] ping");
+    DBG_PRINTLN("[WS] ping");
   } else if (event == WebsocketsEvent::GotPong) {
-    Serial.println("[WS] pong event");
+    DBG_PRINTLN("[WS] pong event");
   }
 }
 
 bool claude_ws_connect() {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WS] WiFi not connected; cannot connect websocket");
+    DBG_PRINTLN("[WS] WiFi not connected; cannot connect websocket");
     return false;
   }
   if (claude_ws_connected || claude_ws_connecting) return claude_ws_connected;
 
   claude_ws_connecting = true;
-  Serial.printf("[WS] Connecting to %s:%d%s\n", SERVER_IP, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
+  DBG_PRINTF("[WS] Connecting to %s:%d%s\n", SERVER_IP, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
 
   bool ok = false;
   if (ws_mutex) xSemaphoreTake(ws_mutex, portMAX_DELAY);
@@ -375,7 +408,7 @@ bool claude_ws_connect() {
   claude_ws_connected = ok;
   claude_ws_connecting = false;
   if (!ok) {
-    Serial.printf("[WS] Connection failed (WiFi status: %d)\n", WiFi.status());
+    DBG_PRINTF("[WS] Connection failed (WiFi status: %d)\n", WiFi.status());
     request_display_line2("WS connect failed");
   }
   return ok;
@@ -392,7 +425,7 @@ void claude_ws_poll() {
 
   if (!still_ok) {
     claude_ws_connected = false;
-    Serial.println("[WS] Lost connection");
+    DBG_PRINTLN("[WS] Lost connection");
   }
 }
 
@@ -403,14 +436,14 @@ bool claude_ws_send_audio_chunk(const uint8_t *pcm, size_t len) {
   ok = claude_ws_client.sendBinary((const char *)pcm, len);
   if (ws_mutex) xSemaphoreGive(ws_mutex);
   if (!ok) {
-    Serial.println("[WS] sendBinary failed");
+    DBG_PRINTLN("[WS] sendBinary failed");
     claude_ws_connected = false;
   } else {
     // Optional: show some activity
     static unsigned long last_chunk_print = 0;
     if (millis() - last_chunk_print > 1000) {
       last_chunk_print = millis();
-      Serial.printf("[WS] Sent audio chunk, size: %u\n", (unsigned)len);
+      DBG_PRINTF("[WS] Sent audio chunk, size: %u\n", (unsigned)len);
     }
   }
   return ok;
@@ -424,11 +457,11 @@ bool claude_ws_send_transcribe() {
   ok = claude_ws_client.send(msg);
   if (ws_mutex) xSemaphoreGive(ws_mutex);
   if (!ok) {
-    Serial.println("[WS] Failed to send transcribe control message");
+    DBG_PRINTLN("[WS] Failed to send transcribe control message");
     claude_ws_connected = false;
     return false;
   }
-  Serial.println("[WS] Sent transcribe control message");
+  DBG_PRINTLN("[WS] Sent transcribe control message");
   return true;
 }
 
@@ -473,18 +506,24 @@ void setup() {
   // Connect to WiFi (used for HTTP requests)
   wifi_connect();
 
+  // Start RemoteDebug only after WiFi stack init/connect to avoid lwIP mbox assert.
+  Debug.begin("claude-voice-esp32");
+  Debug.setResetCmdEnabled(true);
+  Debug.showProfiler(true);
+
   // Configure websocket callbacks and connect to claude-voice backend.
   claude_ws_client.onMessage(claude_ws_on_message);
   claude_ws_client.onEvent(claude_ws_on_event);
   claude_ws_connect();
 
-  Serial.println("[Setup] Serial commands: (w)s reconnect WS, (i)p info\n");
+  DBG_PRINTLN("[Setup] RemoteDebug ready");
+  DBG_PRINTLN("[Setup] Serial commands: (w)s reconnect WS, (i)p info\n");
 }
 
 /* Main recording task loop */
 void loop_task_sound_recorder(void *pvParameters) {
-  Serial.printf("[Recorder] Task '%s' min free stack: %u bytes\n", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
-  Serial.println("[Recorder] loop_task_sound_recorder start...");
+  DBG_PRINTF("[Recorder] Task '%s' min free stack: %u bytes\n", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
+  DBG_PRINTLN("[Recorder] loop_task_sound_recorder start...");
   bool stop_requested = false;
 
   uint8_t input_chunk[1024];  // Increased for efficiency (32ms @ 16kHz Stereo 32-bit)
@@ -504,7 +543,7 @@ void loop_task_sound_recorder(void *pvParameters) {
   response_audio_seen = false;
   response_audio_done_received = false;
   last_audio_payload_ms = 0;
-  Serial.println("Listening...");
+  DBG_PRINTLN("Listening...");
   // Brief delay to allow UI to update before showing listening state
   vTaskDelay(100 / portTICK_PERIOD_MS);
   request_display_line1("Listening...");
@@ -527,7 +566,7 @@ void loop_task_sound_recorder(void *pvParameters) {
     int processed = 0;
     while (iis_buffer_size > 0 && processed < 4096) {
       if (ulTaskNotifyTake(pdTRUE, 0) > 0 || recorder_task_handle == NULL) {
-        Serial.println("[Recorder] Stop requested");
+        DBG_PRINTLN("[Recorder] Stop requested");
         stop_requested = true;
         break;
       }
@@ -547,7 +586,7 @@ void loop_task_sound_recorder(void *pvParameters) {
     vTaskDelay(2 / portTICK_PERIOD_MS);
   }
 
-  Serial.println("[Recorder] loop_task_sound_recorder stop...");
+  DBG_PRINTLN("[Recorder] loop_task_sound_recorder stop...");
   if (!button_abort && conversation_active) {
     request_display_line1("Generating response...");
     request_display_line2("");
@@ -567,7 +606,7 @@ void loop_task_sound_recorder(void *pvParameters) {
 void start_recorder_task(void) {
   // Do not start recorder while player is active
   if (player_task_handle != NULL) {
-    Serial.println("[Recorder] Recorder start suppressed: player active");
+    DBG_PRINTLN("[Recorder] Recorder start suppressed: player active");
     return;
   }
   // Check if the recorder task is not already running
@@ -583,15 +622,15 @@ void start_recorder_task(void) {
 void stop_recorder_task(void) {
   // Request the recorder task to stop via its task handle (graceful stop)
   if (recorder_task_handle != NULL) {
-    Serial.println("[Recorder] Signaling loop_task_sound_recorder to stop...");
-    Serial.println("Please wait...");
+    DBG_PRINTLN("[Recorder] Signaling loop_task_sound_recorder to stop...");
+    DBG_PRINTLN("Please wait...");
     request_display_line1("Please wait...");
     // Clear the handle to signal stop and send notification
     TaskHandle_t temp = recorder_task_handle;
     recorder_task_handle = NULL;
     xTaskNotifyGive(temp);
   } else {
-    Serial.println("[Recorder] Recorder task not running");
+    DBG_PRINTLN("[Recorder] Recorder task not running");
   }
 }
 
@@ -603,12 +642,12 @@ void handle_button_events() {
       conversation_active = false;
       button_abort = true;
       if (recorder_task_handle != NULL) {
-        Serial.println("[Button] Stopping listening...");
+        DBG_PRINTLN("[Button] Stopping listening...");
         stop_recorder_task();
       }
       bool was_player_running = (player_task_handle != NULL);
       if (was_player_running) {
-        Serial.println("[Button] Stopping playback...");
+        DBG_PRINTLN("[Button] Stopping playback...");
         stop_player_task();
         i2s_output_stream_end();
       }
@@ -631,7 +670,7 @@ void handle_button_events() {
       response_audio_seen = false;
       response_audio_done_received = false;
       last_audio_payload_ms = 0;
-      Serial.println("[Button] Starting continuous listening...");
+      DBG_PRINTLN("[Button] Starting continuous listening...");
       request_hideBootInstructions();
       start_recorder_task();
     }
@@ -672,7 +711,7 @@ void loop() {
     display.hideBootInstructions();
   }
   if (display_line1_pending) {
-    Serial.printf("[Loop] line1: %s  line2: %s\n", display_line1_buf, display_line2_buf);
+    DBG_PRINTF("[Loop] line1: %s  line2: %s\n", display_line1_buf, display_line2_buf);
     if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
     char tmp[128];
     strncpy(tmp, display_line1_buf, sizeof(tmp));
@@ -705,16 +744,16 @@ void loop() {
     // Primary gate: explicit backend signal that all response audio is complete.
     bool audio_done = response_audio_done_received;
     // Backward-compatible fallback for older servers that don't send audio_done.
-    if (!audio_done) {
-      audio_done = response_audio_seen
-        ? (now - last_audio_payload_ms > 2500)
-        : (now - response_done_ms > 2500);
+    if (!audio_done && response_audio_seen) {
+      audio_done = (now - last_audio_payload_ms > 2500);
     }
 
-    // Show playing response only after audio playback has started
-    if (!audio_done && response_audio_seen) {
-      request_display_line1("Playing response...");
-      request_display_line2("");
+    // If no audio ever arrives (e.g. text-only backend response), recover after
+    // a conservative timeout instead of restarting too early.
+    bool no_audio_timeout = (!response_audio_seen) && (now - response_done_ms > 15000);
+    if (!audio_done && no_audio_timeout) {
+      DBG_PRINTLN("[WS] No response audio observed; resuming recorder after timeout.");
+      audio_done = true;
     }
 
     if (player_idle && audio_done && done_settled) {
@@ -729,6 +768,7 @@ void loop() {
   }
 
   // Keep websocket alive and process backend messages.
+  Debug.handle();
   claude_ws_poll();
   // Light reconnect policy while idle.
   static unsigned long last_ws_retry = 0;
@@ -741,7 +781,7 @@ void loop() {
     String input = Serial.readStringUntil('\n');
     input.trim();
     if (input == "w") {
-      Serial.println("[Loop] Reconnecting websocket...");
+      DBG_PRINTLN("[Loop] Reconnecting websocket...");
       claude_ws_connected = false;
       claude_ws_connect();
     } else if (input == "i") {
@@ -779,23 +819,23 @@ void wifi_connect() {
 // Simple HTTP GET to the server root for a connectivity test
 void http_test_get() {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[HTTP] Not connected to WiFi");
+    DBG_PRINTLN("[HTTP] Not connected to WiFi");
     return;
   }
 
   HTTPClient http;
   String url = String("http://") + SERVER_IP + ":" + String(CLAUDE_VOICE_WS_PORT) + "/";
-  Serial.printf("[HTTP] GET %s\r\n", url.c_str());
+  DBG_PRINTF("[HTTP] GET %s\r\n", url.c_str());
   http.begin(url);
   int code = http.GET();
   if (code > 0) {
-    Serial.printf("[HTTP] HTTP code: %d\r\n", code);
+    DBG_PRINTF("[HTTP] HTTP code: %d\r\n", code);
     String payload = http.getString();
-    Serial.println("[HTTP] Response (truncated to 1024 chars):");
+    DBG_PRINTLN("[HTTP] Response (truncated to 1024 chars):");
     if (payload.length() > 1024) payload = payload.substring(0, 1024);
-    Serial.println(payload);
+    DBG_PRINTLN(payload.c_str());
   } else {
-    Serial.printf("[HTTP] HTTP GET failed, error: %s\r\n", http.errorToString(code).c_str());
+    DBG_PRINTF("[HTTP] HTTP GET failed, error: %s\r\n", http.errorToString(code).c_str());
   }
   http.end();
 }
@@ -976,7 +1016,7 @@ void start_player_task(void) {
 void stop_player_task(void) {
   // Request player task to stop by notifying it
   if (player_task_handle != NULL) {
-    Serial.println("[Player] Signaling playback to stop...");
+    DBG_PRINTLN("[Player] Signaling playback to stop...");
     // Clear the handle to signal stop and send notification
     TaskHandle_t temp = player_task_handle;
     player_task_handle = NULL;
@@ -985,7 +1025,7 @@ void stop_player_task(void) {
       xTaskNotifyGive(temp);
     }
   } else {
-      Serial.println("[Player] Player task not running");
+      DBG_PRINTLN("[Player] Player task not running");
   }
 }
 
@@ -997,42 +1037,42 @@ int is_player_task_running(void) {
 
 /* Main player task loop */
 void loop_task_play_handle(void *pvParameters) {
-  Serial.printf("[Player] Task '%s' min free stack: %u bytes\n", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
+  DBG_PRINTF("[Player] Task '%s' min free stack: %u bytes\n", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
 
   // Print a message indicating the start of the player task
-  Serial.println("[Player] loop_task_play_handle start...");
+  DBG_PRINTLN("[Player] loop_task_play_handle start...");
   bool stop_requested = false;
   // Loop while the player task is running and handle is not NULL
   while (!stop_requested && player_task_handle != NULL && !button_abort) {
       if (button_abort) {
         // Stop the player task if button abort is requested
-        Serial.println("[Player] Button abort requested, stopping player task");
-        Serial.println("Stopped Playing - Button Aborted");
+        DBG_PRINTLN("[Player] Button abort requested, stopping player task");
+        DBG_PRINTLN("Stopped Playing - Button Aborted");
         request_display_line1("Stopped Playing - Button Aborted");
         stop_requested = true;
         break;
       }
       // Check for a stop notification (non-blocking) or if handle was cleared
       if (ulTaskNotifyTake(pdTRUE, 0) > 0 || player_task_handle == NULL) {
-        Serial.println("Stopped Responding - Task Stopped");
+        DBG_PRINTLN("Stopped Responding - Task Stopped");
         request_display_line1("Stopped Responding - Task Stopped");
         stop_requested = true;
         break;
       }
       // Play the last in-memory recording (PSRAM)
       if (wav_buffer != NULL && last_recorded_size > 0) {
-        Serial.printf("Playing in-memory recording, size=%u\r\n", (unsigned)last_recorded_size);
+        DBG_PRINTF("Playing in-memory recording, size=%u\r\n", (unsigned)last_recorded_size);
         i2s_output_wav(wav_buffer, last_recorded_size);
       } else {
-        Serial.println("[Player] No in-memory recording available to play.");
+        DBG_PRINTLN("[Player] No in-memory recording available to play.");
       }
       // After playback, stop
-      Serial.println("Stopped Responding - Task Finished");
+      DBG_PRINTLN("Stopped Responding - Task Finished");
       request_display_line1("Stopped Responding - Task Finished");
       stop_requested = true;
   }
   // Print a message indicating the end of the player task
-  Serial.println("[Player] loop_task_play_handle stop...");
+  DBG_PRINTLN("[Player] loop_task_play_handle stop...");
   // Clear handle and delete the current task
   player_task_handle = NULL;
   vTaskDelete(NULL);

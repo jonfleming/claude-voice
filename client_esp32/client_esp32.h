@@ -4,6 +4,7 @@ void request_hideBootInstructions();
 void request_clear_lines();
 void request_display_line1(const char *text);
 void request_display_line2(const char *text);
+bool claude_ws_send_stop();
 void stop_recorder_task();
 void start_recorder_task();
 int is_recorder_task_running(void);
