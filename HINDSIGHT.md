@@ -11,10 +11,10 @@ Implement a **prompt‑type classifier** that categorizes each transcribed user 
     → Should be sent to `Hindsight.retain()`.
     
 - **QUESTION** — A general question that can be answered without prior context.  
-    → Should be sent directly to Ollama for generation, then TTS → audio output.
+    → Should use immediate first-pass Ollama response + TTS. Optional background memory lookup may enrich with a second response.
     
 - **QUERY** — A question requiring recalled context or personal history.  
-    → Should call `Hindsight.query()` to retrieve relevant memory, then pass the combined context + user question to Ollama.
+    → Should use immediate first-pass Ollama response + TTS, and must perform background `Hindsight.query()`/`recall()` for a context-aware second response.
     
 
 The classifier must respond with exactly one word:  
@@ -29,8 +29,8 @@ The classifier must respond with exactly one word:
 2. The classifier must first determine whether the text is a _question at all_.
     - If it is **not** a question → classify as **STATEMENT**.
 3. If it _is_ a question:
-    - If it can be answered without prior context → **QUESTION**.
-    - If it depends on prior context or memory → **QUERY**.
+    - If it can be answered without prior context → **QUESTION** (immediate response; memory enrichment optional).
+    - If it depends on prior context or memory → **QUERY** (immediate response + required memory-backed follow-up).
 
 ---
 
@@ -46,23 +46,24 @@ After classification:
 
 #### **QUESTION**
 
-- Call Ollama with the transcribed text as the prompt.
-- Convert Ollama’s response to audio (Piper or your TTS pipeline).
-- Play the audio response.
+- First pass: call Ollama immediately with the transcribed text + a brief "thinking/remembering" instruction.
+- Convert first-pass response to audio and enqueue in `tts_queue` for immediate playback.
+- Optional background pass: run `Hindsight.query()`/`recall()` while audio is playing.
+- If relevant context is returned, issue a second Ollama call with context + original prompt, then enqueue follow-up audio.
 
 #### **QUERY**
 
-- Call: `context = Hindsight.query(transcribed_text)`
-- Construct a combined prompt:
+- First pass: call Ollama immediately with the transcribed text + a brief "thinking/remembering" instruction.
+- Convert first-pass response to audio and enqueue in `tts_queue` for immediate playback.
+- Required background pass: run `context = Hindsight.query()`/`recall()` while first audio is playing.
+- If relevant context is returned, construct a second prompt and call Ollama again:
     
     ```
     <context>
     User: <transcribed_text>
     ```
     
-- Send combined prompt to Ollama.
-- Convert Ollama’s response to audio.
-- Play the audio response.
+- Convert second-pass response to audio and append it to `tts_queue`.
 
 ---
 
@@ -73,7 +74,8 @@ You are a prompt‑type classifier for a voice agent. Classify the following use
 
 - STATEMENT: The user made a declarative statement or command that should be stored in long‑term memory (e.g., storytelling, personal facts, events, instructions).
 - QUESTION: The user asked a general question that does not depend on prior context and does not need to be recalled from memory (e.g., “What is the weather?” or “How do airplanes work?”).
-- QUERY: The user asked a specific question that depends on prior context or personal history and must be answered with recalled context (e.g., “What did I tell you yesterday about my trip?” or “Did I finish the report?”).
+- QUESTION: The user asked a general question that does not depend on prior context. Runtime behavior: immediate first-pass response; optional memory enrichment pass.
+- QUERY: The user asked a specific question that depends on prior context or personal history and must use recalled context. Runtime behavior: immediate first-pass response plus required memory-backed follow-up.
 
 Respond with exactly one word: STATEMENT, QUESTION, or QUERY.
 
@@ -83,6 +85,42 @@ User input:
 Codex should wrap this into whatever function or module is appropriate for the project.
 
 ---
+
+### **Delayed Response**
+
+Hindsight `retain()` and `query()`/`recall()` may take noticeable time. To keep interaction responsive, memory operations must run asynchronously and should not block first audio playback.
+
+For question-style prompts (`QUESTION` and `QUERY`), use a two-pass response strategy:
+
+1. **Immediate response pass (non-blocking)**
+    - As soon as classification completes, send an immediate "thinking" response path to Ollama using:
+        - The original user prompt.
+        - A short instruction such as: "Answer immediately with your best response while I think or try to remember more details."
+    - Convert this first Ollama response to speech.
+    - Push generated audio into `tts_queue` and start streaming to the client right away.
+
+2. **Background memory pass (runs while audio plays)**
+    - While first-pass audio is being played, kick off the Hindsight operation in the background:
+        - `QUESTION`: optional `query()`/`recall()` if desired for enrichment.
+        - `QUERY`: required `query()`/`recall()`.
+        - `STATEMENT`: run `retain()` asynchronously (no immediate TTS response required).
+    - Do not block playback waiting for this result.
+
+3. **Follow-up response pass (context-aware, conditional)**
+    - If Hindsight returns relevant context for the original prompt:
+        - Build a second prompt containing memory context + the original user question.
+        - Send this second prompt to Ollama.
+        - Convert the second Ollama response to speech.
+        - Append it to `tts_queue` so it streams after (or between chunks of) current playback.
+    - If no relevant context is returned, skip second-pass generation.
+
+Implementation notes:
+
+- The pipeline must remain non-blocking end-to-end (classification, first LLM call, TTS streaming, background Hindsight call).
+- Preserve prompt-to-response correlation IDs so the second response is attached to the correct user utterance.
+- Add logs for: classifier result, first-pass dispatch, Hindsight start/end, context hit/miss, and second-pass enqueue.
+- Ensure duplicate/late Hindsight completions are ignored once a conversation turn is cancelled or superseded.
+
 
 ### **Implementation Tasks for Codex**
 

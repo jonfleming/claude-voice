@@ -2,61 +2,72 @@
 
 > [!NOTE]
 > - **Session ID:** `1baaaa97-e67d-42b5-ba10-31d421f1cb0b`  
-> - **Started:** 4/9/2026, 8:03:06 PM  
-> - **Duration:** 11s  
-> - **Exported:** 4/9/2026, 8:03:18 PM  
+> - **Started:** 4/25/2026, 7:45:41 PM  
+> - **Duration:** 13s  
+> - **Exported:** 4/25/2026, 7:45:54 PM  
 
 ---
 
-<sub>⏱️ 4s</sub>
+<sub>⏱️ 1s</sub>
 
 ### 👤 User
 
-how do I prevent WSL from appending Windows folders to PATH?
+I want to make a Telnet connection from the command prompt using a saved PuTTY session.
 
 ---
 
-<sub>⏱️ 11s</sub>
+<sub>⏱️ 13s</sub>
 
 ### 💬 Copilot
 
-To prevent WSL from appending Windows folders to PATH, edit or create `/etc/wsl.conf`:
+To connect using a saved PuTTY session from command prompt:
 
-```bash
-sudo nano /etc/wsl.conf
+**Using PuTTY GUI:**
+```cmd
+putty.exe -load "SessionName"
 ```
 
-Add this configuration:
-
-```ini
-[interop]
-appendWindowsPath = false
+**Using plink (CLI, no GUI):**
+```cmd
+plink -load "SessionName"
 ```
 
-Then **restart WSL** from PowerShell/CMD:
+**Examples:**
+```cmd
+REM Load saved session called "MyTelnetServer"
+putty.exe -load "MyTelnetServer"
 
-```powershell
-wsl --shutdown
+REM Same but command-line only
+plink -load "MyTelnetServer"
 ```
 
-Next time you start WSL, Windows paths won't be in your PATH.
-
-**Alternative - Selective Control:**
-
-If you want some Windows tools but not all paths:
-
-```ini
-[interop]
-appendWindowsPath = false
+**Alternative - Direct Telnet without saved session:**
+```cmd
+plink -telnet hostname
+plink -telnet hostname -P 23
 ```
 
-Then manually add specific Windows tools to your `~/.bashrc` or `~/.zshrc`:
-
-```bash
-export PATH="$PATH:/mnt/c/Windows/System32"
+**Or using Windows built-in telnet:**
+```cmd
+telnet hostname
 ```
 
-This gives you full control over which Windows directories are accessible.
+**Find your saved session names:**
+
+Saved PuTTY sessions are stored in the Windows Registry at:
+```
+HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions
+```
+
+Or list via registry:
+```cmd
+reg query "HKCU\Software\SimonTatham\PuTTY\Sessions"
+```
+
+**Notes:**
+- Session names with spaces need quotes: `"My Session"`
+- `plink` inherits all settings from the saved session (protocol, port, etc.)
+- If the saved session is configured for Telnet, it will use Telnet automatically
 
 ---
 

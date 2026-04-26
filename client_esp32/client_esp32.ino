@@ -59,7 +59,7 @@ SemaphoreHandle_t ws_mutex = NULL;
 #define WIFI_PASS "goodlife"
 
 // The server that runs your transcription/TTS services (*two* Tailnet Bridge)
-#define SERVER_IP "192.168.8.144"
+#define SERVER_IP "192.168.8.145"
 #define CLAUDE_VOICE_WS_PORT 8080
 #define CLAUDE_VOICE_WS_PATH "/ws"
 
@@ -711,7 +711,7 @@ void loop() {
     display.hideBootInstructions();
   }
   if (display_line1_pending) {
-    DBG_PRINTF("[Loop] line1: %s  line2: %s\n", display_line1_buf, display_line2_buf);
+    DBG_PRINTF("[Loop] line1: %s\n", display_line1_buf);
     if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
     char tmp[128];
     strncpy(tmp, display_line1_buf, sizeof(tmp));
@@ -720,6 +720,7 @@ void loop() {
     display.displayLine1(tmp);
   }
   if (display_line2_pending) {
+    DBG_PRINTF("[Loop] line2: %s\n", display_line2_buf);
     if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
     char tmp2[128];
     strncpy(tmp2, display_line2_buf, sizeof(tmp2));
@@ -728,6 +729,7 @@ void loop() {
     display.displayLine2(tmp2);
   }
   if (display_clear_pending) {
+    DBG_PRINTF("[Loop] line1: clear pending\n");
     if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
     display_clear_pending = false;
     if (display_mutex) xSemaphoreGive(display_mutex);

@@ -90,6 +90,7 @@ WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.getenv("WS_PORT", "8080"))
 HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://100.111.132.40:8888")
 HINDSIGHT_BANK = os.getenv("HINDSIGHT_BANK", "amicus-2026")
+ENRICH_QUESTION_WITH_HINDSIGHT = os.getenv("ENRICH_QUESTION_WITH_HINDSIGHT", "false").lower() in {"1", "true", "yes", "on"}
 
 # Global models (loaded once)
 whisper_model: Optional[WhisperModel] = None
@@ -164,6 +165,36 @@ async def recall_memories_async(query: str, budget: str = "low") -> list:
     """Recall relevant memories from Hindsight (async wrapper)."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, recall_memories, query, budget)
+
+
+def build_first_pass_messages(user_text: str) -> list[dict]:
+    """Create first-pass prompt that keeps conversation flowing while memory work happens."""
+    return [
+        {"role": "system", "content": "You are a helpful voice assistant."},
+        {
+            "role": "user",
+            "content": (
+                f"{user_text}\n\n"
+                "Give an immediate best-effort answer now while you think or try to remember "
+                "additional relevant details."
+            ),
+        },
+    ]
+
+
+def build_contextual_messages(user_text: str, memories: list[str]) -> list[dict]:
+    """Create follow-up prompt that includes recalled memory context."""
+    context_prompt = "\n".join([f"- {m}" for m in memories])
+    return [
+        {
+            "role": "system",
+            "content": (
+                f"Relevant past conversations:\n{context_prompt}\n\n"
+                "Use this context when it is relevant. Avoid inventing details not present in memory."
+            ),
+        },
+        {"role": "user", "content": user_text},
+    ]
 
 
 class ConnectionManager:
@@ -604,20 +635,31 @@ async def handle_websocket(websocket: WebSocket):
     tts_worker_task = asyncio.create_task(_tts_worker(tts_queue, websocket))
 
     audio_buffer = AudioBuffer(VAD_THRESHOLD, VAD_MIN_SPEECH, VAD_ENERGY_THRESHOLD, AUDIO_SAMPLE_RATE)
-    chat_history: list[dict] = []
-    pending_memories: list[str] = []  # Memories from previous turn to include
     is_processing = False
     stop_requested = asyncio.Event()
     processing_task: Optional[asyncio.Task] = None
+    background_tasks: set[asyncio.Task] = set()
+    turn_id_counter = 0
+    active_turn_id = 0
     last_rms_log_time = 0
 
-    async def queue_recall(query: str):
-        """Background task to recall memories for next turn."""
-        memories = await recall_memories_async(query, budget="low")
-        if memories:
-            pending_memories.clear()
-            pending_memories.extend(memories)
-            log(f"[Hindsight] Queued {len(memories)} memories for next turn")
+    def track_background_task(task: asyncio.Task, label: str):
+        """Track a background task for cleanup and error logging."""
+        background_tasks.add(task)
+
+        def _on_done(done_task: asyncio.Task):
+            background_tasks.discard(done_task)
+            if done_task.cancelled():
+                log(f"[Task] Cancelled: {label}")
+                return
+            exc = done_task.exception()
+            if exc is not None:
+                log(f"[Task] Failed ({label}): {exc}")
+
+        task.add_done_callback(_on_done)
+
+    def is_turn_active(turn_id: int) -> bool:
+        return (not stop_requested.is_set()) and (turn_id == active_turn_id)
 
     async def reset_tts_worker():
         nonlocal tts_queue, tts_worker_task
@@ -643,9 +685,10 @@ async def handle_websocket(websocket: WebSocket):
         tts_worker_task = asyncio.create_task(_tts_worker(tts_queue, websocket))
 
     async def stop_current_processing(reason: str):
-        nonlocal is_processing, processing_task
+        nonlocal is_processing, processing_task, active_turn_id
 
         stop_requested.set()
+        active_turn_id += 1
         audio_buffer.clear()
         log(f"[WS] Stop requested: {reason}")
 
@@ -656,12 +699,18 @@ async def handle_websocket(websocket: WebSocket):
             except asyncio.CancelledError:
                 pass
 
+        for task in list(background_tasks):
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+        background_tasks.clear()
+
         await reset_tts_worker()
         is_processing = False
 
     async def trigger_transcription(force=False):
         """Helper to trigger transcription and LLM response."""
-        nonlocal is_processing, processing_task
+        nonlocal is_processing, processing_task, turn_id_counter, active_turn_id
         
         if is_processing and not force:
             return
@@ -679,6 +728,10 @@ async def handle_websocket(websocket: WebSocket):
 
         is_processing = True
         stop_requested.clear()
+        turn_id_counter += 1
+        active_turn_id = turn_id_counter
+        current_turn_id = active_turn_id
+        log(f"[Turn] Start turn_id={current_turn_id}")
         if not force:
             await safe_send_json(websocket, {"type": "stop_recording"})
 
@@ -706,56 +759,77 @@ async def handle_websocket(websocket: WebSocket):
 
                 # Classification: STATEMENT, QUESTION, or QUERY
                 classification = classify_prompt_type(text)
-                log(f"[Classifier] Classified as {classification}")
+                log(f"[Classifier] turn_id={current_turn_id} classified as {classification}")
 
-                # If statement, store in memory but still respond
+                # STATEMENT: retain asynchronously; no Ollama/TTS response.
                 if classification == "STATEMENT":
-                    retained = await retain_memory_async(
-                        text, context="voice conversation", tags=["conversation"]
-                    )
-                    if retained:
-                        log("[Hindsight] Statement memory retained")
-                    else:
-                        log("[Hindsight] Statement memory failed to retain")
+                    async def run_statement_retain(turn_id: int, content: str):
+                        log(f"[Hindsight] turn_id={turn_id} retain start")
+                        retained = await retain_memory_async(
+                            content, context="voice conversation", tags=["conversation"]
+                        )
+                        if not is_turn_active(turn_id):
+                            log(f"[Hindsight] turn_id={turn_id} retain finished but turn no longer active")
+                            return
+                        if retained:
+                            log(f"[Hindsight] turn_id={turn_id} statement retained")
+                        else:
+                            log(f"[Hindsight] turn_id={turn_id} statement retain failed")
 
-                # Prepare messages for LLM
-                if classification == "QUERY":
-                    # Retrieve relevant memories
-                    memories = await recall_memories_async(text, budget="low")
-                    if memories:
-                        log(f"[Hindsight] Retrieved {len(memories)} memories for query")
-                        context_prompt = "\n".join([f"- {m}" for m in memories])
-                        system_msg = {
-                            "role": "system",
-                            "content": (
-                                f"Relevant past conversations:\n{context_prompt}\n\n"
-                                "You are a helpful voice assistant."
-                            )
-                        }
-                        messages = [system_msg, {"role": "user", "content": text}]
-                        log(f"[Hindsight] Included memories in context for LLM:\n{context_prompt}")
-                    else:
-                        log("[Hindsight] No memories found for query; proceeding without context")
-                        messages = [
-                            {"role": "system", "content": "You are a helpful voice assistant."},
-                            {"role": "user", "content": text}
-                        ]
-                else:
-                    # General question or statement
-                    messages = [
-                        {"role": "system", "content": "You are a helpful voice assistant."},
-                        {"role": "user", "content": text}
-                    ]
-
-                # Send to Ollama and stream response
-                response = await stream_to_ollama(messages, websocket, tts_queue, stop_requested)
-                if stop_requested.is_set():
-                    log("[WS] Stop requested before final response delivery")
+                    retain_task = asyncio.create_task(run_statement_retain(current_turn_id, text))
+                    track_background_task(retain_task, f"retain(turn_id={current_turn_id})")
+                    await safe_send_json(websocket, {"type": "done", "content": ""})
+                    await safe_send_json(websocket, {"type": "audio_done"})
                     return
-                await safe_send_json(websocket, {"type": "done", "content": response})
-                # Ensure all TTS segments are sent
+
+                should_recall = classification == "QUERY" or (
+                    classification == "QUESTION" and ENRICH_QUESTION_WITH_HINDSIGHT
+                )
+                recall_task: Optional[asyncio.Task] = None
+                if should_recall:
+                    log(f"[Hindsight] turn_id={current_turn_id} recall start (classification={classification})")
+                    recall_task = asyncio.create_task(recall_memories_async(text, budget="low"))
+                    track_background_task(recall_task, f"recall(turn_id={current_turn_id})")
+
+                # First pass: answer immediately while memory lookup runs in background.
+                first_pass_messages = build_first_pass_messages(text)
+                first_response = await stream_to_ollama(first_pass_messages, websocket, tts_queue, stop_requested)
+                if not is_turn_active(current_turn_id):
+                    log(f"[WS] turn_id={current_turn_id} inactive after first pass; skipping follow-up")
+                    return
+
+                second_response = ""
+                if recall_task is not None:
+                    try:
+                        memories = await recall_task
+                        log(f"[Hindsight] turn_id={current_turn_id} recall finished with {memories} ")
+                    except asyncio.CancelledError:
+                        log(f"[Hindsight] turn_id={current_turn_id} recall cancelled")
+                        memories = []
+
+                    if not is_turn_active(current_turn_id):
+                        log(f"[Hindsight] turn_id={current_turn_id} recall completed late; ignoring")
+                    elif memories:
+                        log(f"[Hindsight] turn_id={current_turn_id} context hit ({len(memories)} memories)")
+                        follow_up_messages = build_contextual_messages(text, memories)
+                        second_response = await stream_to_ollama(
+                            follow_up_messages, websocket, tts_queue, stop_requested
+                        )
+                    else:
+                        log(f"[Hindsight] turn_id={current_turn_id} context miss")
+
+                combined_response = first_response
+                if second_response:
+                    combined_response = f"{first_response}\n\n{second_response}".strip()
+
+                if not is_turn_active(current_turn_id):
+                    log(f"[WS] turn_id={current_turn_id} inactive before final response delivery")
+                    return
+
+                await safe_send_json(websocket, {"type": "done", "content": combined_response})
+                # Ensure all queued TTS (including any follow-up pass) is sent.
                 await tts_queue.join()
-                if not stop_requested.is_set():
+                if is_turn_active(current_turn_id):
                     await safe_send_json(websocket, {"type": "audio_done"})
             else:
                 log("[STT] No meaningful speech detected")
@@ -862,6 +936,11 @@ async def handle_websocket(websocket: WebSocket):
                 await processing_task
             except asyncio.CancelledError:
                 pass
+        for task in list(background_tasks):
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+        background_tasks.clear()
         # Shutdown TTS worker gracefully
         try:
             # enqueue sentinel and wait for worker to finish
