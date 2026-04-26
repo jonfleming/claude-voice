@@ -84,6 +84,8 @@ volatile TaskHandle_t player_task_handle = NULL;    // NULL = not playing, non-N
 // Thread-safe display request buffers (background tasks must never call LVGL directly)
 char display_line1_buf[128] = {0};
 volatile bool display_line1_pending = false;
+char display_line1_next_buf[128] = {0};
+volatile bool display_line1_next_pending = false;
 char display_line2_buf[128] = {0};
 volatile bool display_line2_pending = false;
 
@@ -133,9 +135,16 @@ void request_clear_lines() {
 // Request a main-loop display update for line1
 void request_display_line1(const char *text) {
   if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
-  strncpy(display_line1_buf, text, sizeof(display_line1_buf)-1);
-  display_line1_buf[sizeof(display_line1_buf)-1] = '\0';
-  display_line1_pending = true;
+  if (!display_line1_pending) {
+    strncpy(display_line1_buf, text, sizeof(display_line1_buf)-1);
+    display_line1_buf[sizeof(display_line1_buf)-1] = '\0';
+    display_line1_pending = true;
+  } else {
+    // Keep one extra queued update so rapid state transitions don't drop line1.
+    strncpy(display_line1_next_buf, text, sizeof(display_line1_next_buf)-1);
+    display_line1_next_buf[sizeof(display_line1_next_buf)-1] = '\0';
+    display_line1_next_pending = true;
+  }
   if (display_mutex) xSemaphoreGive(display_mutex);
 }
 
@@ -314,7 +323,17 @@ void handle_claude_ws_json(const String &json) {
       // queued just before audio_done arrived.
       if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
       if (display_line1_pending && strcmp(display_line1_buf, "Playing response...") == 0) {
-        display_line1_pending = false;
+        if (display_line1_next_pending) {
+          strncpy(display_line1_buf, display_line1_next_buf, sizeof(display_line1_buf)-1);
+          display_line1_buf[sizeof(display_line1_buf)-1] = '\0';
+          display_line1_next_pending = false;
+          display_line1_pending = true;
+        } else {
+          display_line1_pending = false;
+        }
+      }
+      if (display_line1_next_pending && strcmp(display_line1_next_buf, "Playing response...") == 0) {
+        display_line1_next_pending = false;
       }
       if (display_mutex) xSemaphoreGive(display_mutex);
     }
@@ -714,8 +733,16 @@ void loop() {
     DBG_PRINTF("[Loop] line1: %s\n", display_line1_buf);
     if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
     char tmp[128];
-    strncpy(tmp, display_line1_buf, sizeof(tmp));
-    display_line1_pending = false;
+    strncpy(tmp, display_line1_buf, sizeof(tmp)-1);
+    tmp[sizeof(tmp)-1] = '\0';
+    if (display_line1_next_pending) {
+      strncpy(display_line1_buf, display_line1_next_buf, sizeof(display_line1_buf)-1);
+      display_line1_buf[sizeof(display_line1_buf)-1] = '\0';
+      display_line1_next_pending = false;
+      display_line1_pending = true;
+    } else {
+      display_line1_pending = false;
+    }
     if (display_mutex) xSemaphoreGive(display_mutex);
     display.displayLine1(tmp);
   }

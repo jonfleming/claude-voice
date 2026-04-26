@@ -141,14 +141,30 @@ def recall_memories(query: str, budget: str = "low") -> list:
         return []
     try:
         result = client.recall(bank_id=HINDSIGHT_BANK, query=query, budget=budget)
-        if result and isinstance(result, list):
-            memories = []
-            for item in result:
-                if isinstance(item, dict) and "text" in item:
-                    memories.append(item["text"])
-                elif isinstance(item, str):
-                    memories.append(item)
-            return memories
+        log(f"[Hindsight] Recall {query}:\n {result}")
+
+        if result is None:
+            return []
+
+        if hasattr(result, "results"):
+            items = result.results or []
+        elif isinstance(result, dict) and "results" in result:
+            items = result["results"] or []
+        elif isinstance(result, list):
+            items = result
+        else:
+            items = []
+
+        memories = []
+        for item in items:
+            text = getattr(item, "text", None)
+            if text:
+                memories.append(text)
+            elif isinstance(item, dict) and "text" in item:
+                memories.append(item["text"])
+            elif isinstance(item, str):
+                memories.append(item)
+        return memories
         return []
     except Exception as e:
         log(f"[Hindsight] Recall failed: {e}")
@@ -164,7 +180,8 @@ async def retain_memory_async(content: str, context: str = "", tags: list = None
 async def recall_memories_async(query: str, budget: str = "low") -> list:
     """Recall relevant memories from Hindsight (async wrapper)."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, recall_memories, query, budget)
+    response = await loop.run_in_executor(None, recall_memories, query, budget)
+    return response
 
 
 def build_first_pass_messages(user_text: str) -> list[dict]:
@@ -719,10 +736,11 @@ async def handle_websocket(websocket: WebSocket):
         if not audio_data:
             return
 
-        # Transcription Gate: Check if the overall energy is high enough to be real speech
+        # Transcription Gate: Always require a minimum energy floor to avoid
+        # force-transcribe hallucinations on silence/noise-only buffers.
         total_rms = get_rms(audio_data)
-        if not force and total_rms < audio_buffer.energy_threshold * 1.2:
-            log(f"[VAD] Ignoring low-energy segment (RMS: {total_rms:.4f})")
+        if total_rms < audio_buffer.energy_threshold * 1.2:
+            log(f"[VAD] Ignoring low-energy segment (RMS: {total_rms:.4f}, force={force})")
             audio_buffer.clear()
             return
 
