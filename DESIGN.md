@@ -2,24 +2,38 @@
 
 ## Memory Layer (Hindsight)
 
-### Async Recall Pattern
-To avoid blocking the voice conversation turn, recall requests are decoupled from the current turn:
+### Prompt Classification And Routing
+Each non-empty transcription is classified into one of four categories:
 
-1. **Turn N**: User speaks → Server responds immediately (no recall delay)
-2. **Background**: After response, queue recall task asynchronously (`asyncio.create_task`)
-3. **Turn N+1**: Include any pending memories from previous turn in the LLM context
+- `FACT`: Declarative personal fact worth retaining.
+- `STATEMENT`: Declarative content that does not require memory storage.
+- `QUESTION`: General question that can be answered without prior context.
+- `QUERY`: Context-dependent question that should use recalled memory.
 
-This prevents the 1-2 second recall delay from adding to the user's wait time.
+### Async Two-Pass Response Pattern
+To keep voice turns responsive, the server always sends an immediate first-pass LLM+TTS response, while memory operations run asynchronously:
+
+1. **Immediate pass**: Classify text and start Ollama streaming right away; TTS audio is enqueued as tokens arrive.
+2. **Background memory work**:
+	- `FACT`: run `retain()` asynchronously while first-pass audio is playing.
+	- `QUESTION`: optional `recall()` in background when enrichment is enabled.
+	- `QUERY`: required `recall()` in background.
+3. **Conditional follow-up**: if recall returns relevant context and turn is still active, run a second context-aware Ollama pass and enqueue follow-up TTS.
+
+Late/duplicate background completions are ignored for canceled or superseded turns.
 
 ### Implementation
-- `pending_memories`: List that holds memories from the previous turn
-- `queue_recall(query)`: Background task that calls Hindsight and stores results in `pending_memories`
-- At the start of each turn, check `pending_memories` and prepend to LLM context if present
+- `classify_prompt_type(text)`: Returns `FACT`, `STATEMENT`, `QUESTION`, or `QUERY`.
+- `retain_memory_async(...)`: Non-blocking memory write used for `FACT`.
+- `recall_memories_async(...)`: Non-blocking memory lookup used for `QUESTION` (optional) and `QUERY` (required).
+- Turn guards (`turn_id`, active-turn checks): Prevent stale memory results from affecting newer turns.
+- `tts_queue` worker: Ensures FIFO audio playback for first and follow-up responses.
 
 ### Configuration
 - `HINDSIGHT_HOST`: Base URL for Hindsight (default: `http://localhost:8888`)
 - `HINDSIGHT_BANK`: Memory bank ID (default: `default`)
 - `budget`: Recall parameter controlling depth/breadth of query (default: `"low"`)
+- `ENRICH_QUESTION_WITH_HINDSIGHT`: Enables optional recall enrichment for `QUESTION` prompts (default: `false`)
 
 ## Voice Activity Detection (VAD)
 

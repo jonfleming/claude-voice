@@ -27,7 +27,8 @@ The classifier must respond with exactly one word:
 1. **Use a small, fast local model** (e.g., tinyllama:1.1b
  or rule‑based classifier) to classify the transcribed text.
 2. The classifier must first determine whether the text is a _question at all_.
-    - If it is **not** a question → classify as **STATEMENT**.
+    - If it is **not** a question, determine if it is a fact that should be remembered. 
+    - If it is an important fact, classify as **FACT**, otherwise classify it as **STATEMENT**.
 3. If it _is_ a question:
     - If it can be answered without prior context → **QUESTION** (immediate response; memory enrichment optional).
     - If it depends on prior context or memory → **QUERY** (immediate response + required memory-backed follow-up).
@@ -39,10 +40,13 @@ The classifier must respond with exactly one word:
 After classification:
 
 #### **STATEMENT**
+- Send Response: Call Ollama immediately with transcribed text and enqueue response in `tts_queue` for immediate playback.
+- Do **not** call Hindsight.
 
-- Call: `Hindsight.retain(transcribed_text)`
-- Do **not** call Ollama.
-- Do **not** generate audio output.
+#### **FACT**
+
+- Call Ollama immediately with transcribed text and enqueue response in `tts_queue` for immediate playback.
+- Run `Hindsight.retain(transcribed_text)` while audio is playing.
 
 #### **QUESTION**
 

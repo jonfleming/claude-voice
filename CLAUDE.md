@@ -9,9 +9,10 @@ See [DESIGN.md](./DESIGN.md) for detailed design decisions and architectural rat
 Voice AI Pipeline - a WebSocket-based service that processes audio end-to-end:
 1. Receives audio over WebSocket
 2. Converts speech to text (STT) using local Whisper
-3. Sends text to local Ollama LLM
-4. Converts LLM response to speech (TTS) using local Piper
-5. Sends audio back to client
+3. Classifies transcribed text as FACT, STATEMENT, QUESTION, or QUERY
+4. Sends text to local Ollama LLM
+5. Converts LLM response to speech (TTS) using local Piper
+6. Sends audio back to client
 
 ## Commands
 
@@ -56,6 +57,7 @@ Edit `.env` file:
 - `PIPER_MODEL` - TTS model file
 - `WS_PORT` - WebSocket port (default: 8080)
 - `VAD_THRESHOLD` - Seconds of silence to trigger transcription (default: 1.5)
+- `ENRICH_QUESTION_WITH_HINDSIGHT` - Optional recall enrichment for QUESTION classification (default: false)
 
 ## WebSocket Protocol
 
@@ -77,8 +79,15 @@ Connect to `ws://localhost:8080/ws`
 - **server.py**: Main WebSocket server with:
   - `AudioBuffer` class: Handles audio buffering and VAD detection
   - `transcribe_audio()`: STT using faster-whisper
+  - `classify_prompt_type()`: Classifies into FACT/STATEMENT/QUESTION/QUERY
   - `stream_to_ollama()`: LLM integration with streaming TTS
   - `text_to_speech()`: TTS using Piper
+  - Routing behavior:
+    - FACT: immediate response + async `Hindsight.retain()`
+    - STATEMENT: immediate response only
+    - QUESTION: immediate response + optional recall enrichment
+    - QUERY: immediate response + required recall, optional second context-aware follow-up
+  - All non-empty transcriptions produce an immediate Ollama/TTS audio response path
 - **ESP32 client state model**:
   - Button press while listening or playing is a hard stop to boot/idle state.
   - In idle state, stale in-flight conversation audio/messages from backend are ignored.

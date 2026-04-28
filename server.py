@@ -184,18 +184,23 @@ async def recall_memories_async(query: str, budget: str = "low") -> list:
     return response
 
 
-def build_first_pass_messages(user_text: str) -> list[dict]:
-    """Create first-pass prompt that keeps conversation flowing while memory work happens."""
+def build_first_pass_messages(user_text: str, classification: str) -> list[dict]:
+    """Create first-pass prompt tailored to the prompt classification."""
+    if classification in {"QUESTION", "QUERY"}:
+        user_content = (
+            f"{user_text}\n\n"
+            "Give an immediate best-effort answer now while you think or try to remember "
+            "additional relevant details."
+        )
+    else:
+        user_content = (
+            f"{user_text}\n\n"
+            "Respond naturally and directly to what the user said."
+        )
+
     return [
         {"role": "system", "content": "You are a helpful voice assistant."},
-        {
-            "role": "user",
-            "content": (
-                f"{user_text}\n\n"
-                "Give an immediate best-effort answer now while you think or try to remember "
-                "additional relevant details."
-            ),
-        },
+        {"role": "user", "content": user_content},
     ]
 
 
@@ -775,13 +780,13 @@ async def handle_websocket(websocket: WebSocket):
                 log(f"[STT] {text}")
                 await safe_send_json(websocket, {"type": "text", "content": text})
 
-                # Classification: STATEMENT, QUESTION, or QUERY
+                # Classification: FACT, STATEMENT, QUESTION, or QUERY
                 classification = classify_prompt_type(text)
                 log(f"[Classifier] turn_id={current_turn_id} classified as {classification}")
 
-                # STATEMENT: retain asynchronously; no Ollama/TTS response.
-                if classification == "STATEMENT":
-                    async def run_statement_retain(turn_id: int, content: str):
+                # FACT: retain asynchronously while still providing immediate response.
+                if classification == "FACT":
+                    async def run_fact_retain(turn_id: int, content: str):
                         log(f"[Hindsight] turn_id={turn_id} retain start")
                         retained = await retain_memory_async(
                             content, context="voice conversation", tags=["conversation"]
@@ -790,15 +795,12 @@ async def handle_websocket(websocket: WebSocket):
                             log(f"[Hindsight] turn_id={turn_id} retain finished but turn no longer active")
                             return
                         if retained:
-                            log(f"[Hindsight] turn_id={turn_id} statement retained")
+                            log(f"[Hindsight] turn_id={turn_id} fact retained")
                         else:
-                            log(f"[Hindsight] turn_id={turn_id} statement retain failed")
+                            log(f"[Hindsight] turn_id={turn_id} fact retain failed")
 
-                    retain_task = asyncio.create_task(run_statement_retain(current_turn_id, text))
+                    retain_task = asyncio.create_task(run_fact_retain(current_turn_id, text))
                     track_background_task(retain_task, f"retain(turn_id={current_turn_id})")
-                    await safe_send_json(websocket, {"type": "done", "content": ""})
-                    await safe_send_json(websocket, {"type": "audio_done"})
-                    return
 
                 should_recall = classification == "QUERY" or (
                     classification == "QUESTION" and ENRICH_QUESTION_WITH_HINDSIGHT
@@ -810,7 +812,7 @@ async def handle_websocket(websocket: WebSocket):
                     track_background_task(recall_task, f"recall(turn_id={current_turn_id})")
 
                 # First pass: answer immediately while memory lookup runs in background.
-                first_pass_messages = build_first_pass_messages(text)
+                first_pass_messages = build_first_pass_messages(text, classification)
                 first_response = await stream_to_ollama(first_pass_messages, websocket, tts_queue, stop_requested)
                 if not is_turn_active(current_turn_id):
                     log(f"[WS] turn_id={current_turn_id} inactive after first pass; skipping follow-up")

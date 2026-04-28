@@ -29,7 +29,7 @@ using namespace websockets;
 
 RemoteDebug Debug;
 
-#define DBG_PRINTLN(msg) Debug.println(msg)
+#define DBG_PRINTLN(msg) do { Debug.printf("[%8lu] ", millis()); Debug.println(msg); } while(0)
 #define DBG_PRINT(msg) Debug.print(msg)
 #define DBG_PRINTF(...) Debug.printf(__VA_ARGS__)
 
@@ -290,12 +290,12 @@ void handle_claude_ws_json(const String &json) {
       request_display_line2("Generating response...");
     }
   } else if (type == "response") {
-    // String token = extract_json_string_value(json, "content");
-    // // Do NOT trim token here; Ollama often sends tokens with leading/trailing spaces
-    // if (token.length() > 0) {
-    //   Serial.print(token);
-    //   request_display_line2(token.c_str());
-    // }
+    String token = extract_json_string_value(json, "content");
+    // Do NOT trim token here; Ollama often sends tokens with leading/trailing spaces
+    if (token.length() > 0) {
+      Serial.print(token);
+      request_display_line2(token.c_str());
+    }
   } else if (type == "audio") {
     // We now prefer raw binary audio frames (handled in on_message) for efficiency.
     // Skip JSON-encoded audio to avoid double-playing.
@@ -398,15 +398,19 @@ void claude_ws_on_event(WebsocketsEvent event, String data) {
       claude_ws_connecting = false;
       DBG_PRINTLN("[WS] Connection opened");
       request_display_line2("Connected using GL router");
+      break;
     case WebsocketsEvent::ConnectionClosed:
       claude_ws_connected = false;
       claude_ws_connecting = false;
       DBG_PRINTF("[WS] Connection closed: %s\n", data.c_str());
       request_display_line2("Disconnected");
+      break;
     case WebsocketsEvent::GotPing:
       DBG_PRINTLN("[WS] ping");
+      break;
     case WebsocketsEvent::GotPong:
       DBG_PRINTLN("[WS] pong event");
+      break;
   }
 }
 

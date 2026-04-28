@@ -3,9 +3,10 @@
 A WebSocket-based service that processes audio end-to-end:
 
 1. **STT**: Receives audio, converts speech to text using local Whisper
-2. **LLM**: Sends text to local Ollama, receives streamed response
-3. **TTS**: Converts response to speech using local Piper TTS
-4. **Audio**: Sends synthesized speech back to client
+2. **Classifier**: Routes text as `FACT`, `STATEMENT`, `QUESTION`, or `QUERY`
+3. **LLM**: Sends text to local Ollama, receives streamed response
+4. **TTS**: Converts response to speech using local Piper TTS
+5. **Audio**: Sends synthesized speech back to client
 
 ## Requirements
 
@@ -135,7 +136,19 @@ Edit `.env` to configure:
 | `VAD_THRESHOLD` | 1.0 | Seconds of silence to trigger STT |
 | `VAD_MIN_SPEECH` | 0.3 | Minimum seconds of speech to trigger |
 | `VAD_ENERGY_THRESHOLD` | 0.161 | RMS energy threshold for VAD |
+| `ENRICH_QUESTION_WITH_HINDSIGHT` | false | Enable optional memory recall enrichment for `QUESTION` |
 | `WS_PORT` | 8080 | WebSocket server port |
+
+## Prompt Routing And Memory
+
+After transcription, the server classifies each utterance and routes work asynchronously:
+
+- `FACT`: Immediate Ollama + TTS response, plus background `Hindsight.retain()`.
+- `STATEMENT`: Immediate Ollama + TTS response, no memory operation.
+- `QUESTION`: Immediate first-pass Ollama + TTS response, optional background `Hindsight.recall()` when `ENRICH_QUESTION_WITH_HINDSIGHT=true`.
+- `QUERY`: Immediate first-pass Ollama + TTS response, required background `Hindsight.recall()`, and optional second context-aware Ollama/TTS follow-up when memory hits.
+
+All non-empty transcriptions now produce an immediate audio response path.
 
 ## WebSocket Protocol
 
