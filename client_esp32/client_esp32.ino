@@ -392,20 +392,21 @@ void claude_ws_on_message(WebsocketsMessage message) {
 }
 
 void claude_ws_on_event(WebsocketsEvent event, String data) {
-  if (event == WebsocketsEvent::ConnectionOpened) {
-    claude_ws_connected = true;
-    claude_ws_connecting = false;
-    DBG_PRINTLN("[WS] Connection opened");
-    request_display_line2("Connected using GL router");
-  } else if (event == WebsocketsEvent::ConnectionClosed) {
-    claude_ws_connected = false;
-    claude_ws_connecting = false;
-    DBG_PRINTF("[WS] Connection closed: %s\n", data.c_str());
-    request_display_line2("Disconnected");
-  } else if (event == WebsocketsEvent::GotPing) {
-    DBG_PRINTLN("[WS] ping");
-  } else if (event == WebsocketsEvent::GotPong) {
-    DBG_PRINTLN("[WS] pong event");
+  switch(event) {
+    case WebsocketsEvent::ConnectionOpened:
+      claude_ws_connected = true;
+      claude_ws_connecting = false;
+      DBG_PRINTLN("[WS] Connection opened");
+      request_display_line2("Connected using GL router");
+    case WebsocketsEvent::ConnectionClosed:
+      claude_ws_connected = false;
+      claude_ws_connecting = false;
+      DBG_PRINTF("[WS] Connection closed: %s\n", data.c_str());
+      request_display_line2("Disconnected");
+    case WebsocketsEvent::GotPing:
+      DBG_PRINTLN("[WS] ping");
+    case WebsocketsEvent::GotPong:
+      DBG_PRINTLN("[WS] pong event");
   }
 }
 
