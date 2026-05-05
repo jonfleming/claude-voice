@@ -90,6 +90,8 @@ python server.py
 
 ## Clients
 
+For the Tailscale bridge deployment that connects the ESP32 through a GL travel router and Raspberry Pi relay, see [TAILSCALE_BRIDGE.md](./TAILSCALE_BRIDGE.md).
+
 ### 1. Web Client (Node.js)
 A modern, responsive web interface located in `client-node/`.
 - **Chat UI**: Traditional message feed for transcripts and AI responses.
