@@ -12,8 +12,11 @@
 #include <Arduino.h>
 
 // Reuse the known-good Freenove display stack from the full client.
-#include "../client_esp32/driver_button.cpp"
-#include "../client_esp32/display.cpp"
+// These are implemented by sketch-local bridge .cpp files so Arduino
+// compiles them as normal translation units (more stable than text-including
+// source files directly in the .ino).
+#include "../client_esp32/driver_button.h"
+#include "../client_esp32/display.h"
 
 static uint32_t last_update_ms = 0;
 static uint32_t counter = 0;
