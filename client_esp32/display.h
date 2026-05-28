@@ -4,9 +4,11 @@
 #include "lvgl.h"
 #include "TFT_eSPI.h"
 #include "driver_button.h"
+#include "board_pins.h"
 
-#define TFT_BL 20
-#define BUTTON_PIN 19
+// Board-profile pin macros (defined in board_pins.h)
+// TFT_BL  - TFT backlight pin
+// BUTTON_PIN - Button input pin
 #define TFT_DIRECTION 1           // Define the direction of the TFT display
 extern lv_indev_t* indev_keypad;  // External declaration of the keypad input device
 // Class to handle display operations

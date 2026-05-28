@@ -12,6 +12,28 @@ This guide is for agentic coding agents contributing to this ESP32 Arduino proje
 - Target board: `esp32:esp32:esp32s3` (ESP32-S3 core)
 - Sketch: `voice_assistant_esp32.ino`
 
+### Board Selection
+
+The project supports two hardware boards via compile-time selection:
+
+| Board | Define | Notes |
+|-------|--------|-------|
+| **Freenove** (default) | *(none)* | FNK0102A/B, parallel TFT, external I2S mic |
+| **AIPI Lite** | `BOARD_AIPI_LITE` | ST7735 SPI display, ES8311 I2S codec, battery powered |
+
+**To build for AIPI Lite:**
+```sh
+arduino-cli compile --fqbn esp32:esp32:esp32s3 --build-property "compiler.c.extra_flags=-DBOARD_AIPI_LITE" --build-property "compiler.cpp.extra_flags=-DBOARD_AIPI_LITE" voice_assistant_esp32.ino
+```
+
+Or uncomment `#define BOARD_AIPI_LITE` in `board_pins.h`.
+
+**Key differences:**
+- AIPI-Lite requires GPIO10 HIGH on boot (power keep-alive)
+- AIPI-Lite uses SPI display (ST7735) vs Freenove's parallel TFT
+- AIPI-Lite has ES8311 I2S codec (needs MCLK) vs Freenove's external I2S mic
+- AIPI-Lite has speaker amp enable (GPIO9) that must be asserted before playback
+
 ### Build firmware
 - **Compile for ESP32-S3:**
   ```sh

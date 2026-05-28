@@ -5,6 +5,7 @@
 #include "ESP_I2S.h"
 
 void audio_input_init(uint8_t sck, uint8_t ws, uint8_t din);
+void audio_input_init_mclk(uint8_t mclk, uint8_t sck, uint8_t ws, uint8_t din);
 void audio_input_deinit(void);
 uint8_t* audio_input_record_wav(uint32_t duration, size_t& wav_size);
 void audio_input_print_buffer(uint8_t* buffer, size_t size);

@@ -6,11 +6,17 @@
 * 
 * Author: Jon Fleming
 * Date:   2026-03-30
+*
+* Board Selection:
+*   Default build targets **Freenove** (FNK0102A/B).
+*   To build for **AIPI Lite**: define `BOARD_AIPI_LITE`
+*   (add -DBOARD_AIPI_LITE in build flags, or uncomment the define in board_pins.h).
 */
 #include "driver_audio_input.h"
 #include "driver_audio_output.h"
 #include "driver_button.h"
 #include "client_esp32.h"
+#include "board_pins.h"
 #include <esp_heap_caps.h>
 #include <ArduinoWebsockets.h>
 #include <mbedtls/base64.h>
@@ -38,16 +44,41 @@ SemaphoreHandle_t display_mutex = NULL;
 SemaphoreHandle_t ws_mutex = NULL;
 
 #define RECORDER_FOLDER ""
-// Define the pin number for the button (do not modify)
-#define BUTTON_PIN 19
-// Define the pin numbers for audio input (do not modify)
+
+// Board-profile pin macros are defined in board_pins.h
+// (uncomment BOARD_AIPI_LITE to switch from Freenove to AIPI Lite)
+//
+// Freenove pins:
+//   BUTTON_PIN=19, AUDIO_INPUT_SCK=3, AUDIO_INPUT_WS=14, AUDIO_INPUT_DIN=46
+//   AUDIO_OUTPUT_BCLK=42, AUDIO_OUTPUT_LRC=41, AUDIO_OUTPUT_DOUT=1
+//
+// AIPI-Lite pins:
+//   BUTTON_PIN=42, AUDIO_INPUT_MCLK=6, AUDIO_INPUT_BCLK=14, AUDIO_INPUT_LRCLK=12, AUDIO_INPUT_DIN=13
+//   AUDIO_OUTPUT_MCLK=6, AUDIO_OUTPUT_BCLK=14, AUDIO_OUTPUT_LRCLK=12, AUDIO_OUTPUT_DOUT=11
+//   SPEAKER_AMP_ENABLE=9, POWER_KEEP_ALIVE_PIN=10
+//
+// Note: AUDIO_INPUT_WS is aliased to AUDIO_INPUT_BCLK for the ES8311 codec on AIPI-Lite.
+// The audio_input_init() function maps its (sck, ws, din) params to (BCLK, LRCLK, DIN).
+
+// Fallback local defines (only used for Freenove; AIPI-Lite pins come from board_pins.h)
+#ifndef AUDIO_INPUT_SCK
 #define AUDIO_INPUT_SCK 3
-#define AUDIO_INPUT_WS 14     
-#define AUDIO_INPUT_DIN 46    
-// Define the pin numbers for audio output (do not modify)
-#define AUDIO_OUTPUT_BCLK 42  
-#define AUDIO_OUTPUT_LRC 41   
-#define AUDIO_OUTPUT_DOUT 1   
+#endif
+#ifndef AUDIO_INPUT_WS
+#define AUDIO_INPUT_WS 14
+#endif
+#ifndef AUDIO_INPUT_DIN
+#define AUDIO_INPUT_DIN 46
+#endif
+#ifndef AUDIO_OUTPUT_BCLK
+#define AUDIO_OUTPUT_BCLK 42
+#endif
+#ifndef AUDIO_OUTPUT_LRC
+#define AUDIO_OUTPUT_LRC 41
+#endif
+#ifndef AUDIO_OUTPUT_DOUT
+#define AUDIO_OUTPUT_DOUT 1
+#endif
 
 // Define the size of PSRAM in bytes
 #define MOLLOC_SIZE (4 * 1024 * 1024)
@@ -243,6 +274,13 @@ void play_backend_audio_base64(const String &b64_audio) {
 
   player_task_handle = (TaskHandle_t)1;
 
+  // ============ AIPI-Lite Speaker Amp Enable ============
+#ifdef BOARD_AIPI_LITE
+  digitalWrite(SPEAKER_AMP_ENABLE, HIGH);  // Enable speaker amp
+  delay(10);  // Brief delay for amp to stabilize
+#endif
+  // =====================================================
+
   bool is_wav = out_len >= 12 &&
     decoded[0] == 'R' && decoded[1] == 'I' && decoded[2] == 'F' && decoded[3] == 'F' &&
     decoded[8] == 'W' && decoded[9] == 'A' && decoded[10] == 'V' && decoded[11] == 'E';
@@ -258,6 +296,13 @@ void play_backend_audio_base64(const String &b64_audio) {
       DBG_PRINTLN("[WS] Failed to initialize I2S stream for backend audio");
     }
   }
+
+  // ============ AIPI-Lite Speaker Amp Disable ============
+#ifdef BOARD_AIPI_LITE
+  digitalWrite(SPEAKER_AMP_ENABLE, LOW);  // Disable speaker amp
+  delay(10);
+#endif
+  // ======================================================
 
   player_task_handle = NULL;
   free(decoded);
@@ -367,6 +412,13 @@ void claude_ws_on_message(WebsocketsMessage message) {
       }
       player_task_handle = (TaskHandle_t)1;
       
+      // ============ AIPI-Lite Speaker Amp Enable ============
+#ifdef BOARD_AIPI_LITE
+      digitalWrite(SPEAKER_AMP_ENABLE, HIGH);  // Enable speaker amp
+      delay(10);  // Brief delay for amp to stabilize
+#endif
+      // =====================================================
+      
       const uint8_t *data = (const uint8_t *)payload.data();
       size_t len = payload.size();
 
@@ -383,8 +435,15 @@ void claude_ws_on_message(WebsocketsMessage message) {
           i2s_output_stream_end();
         }
       }
+
+      // ============ AIPI-Lite Speaker Amp Disable ============
+#ifdef BOARD_AIPI_LITE
+      digitalWrite(SPEAKER_AMP_ENABLE, LOW);  // Disable speaker amp
+      delay(10);
+#endif
+      // ======================================================
+
       player_task_handle = NULL;
-    }
     return;
   }
 
@@ -494,6 +553,24 @@ int last_button_state_for_toggle = Button::KEY_STATE_IDLE;
 
 // Setup function to initialize the hardware and software components
 void setup() {
+  // ============ AIPI-Lite Power Management (CRITICAL) ============
+  // MUST set GPIO10 HIGH immediately to prevent bootloader power-down.
+  // Only applies when BOARD_AIPI_LITE is defined.
+#ifdef BOARD_AIPI_LITE
+  pinMode(POWER_KEEP_ALIVE_PIN, OUTPUT);
+  digitalWrite(POWER_KEEP_ALIVE_PIN, HIGH);  // Keep device powered on battery
+  delay(10);  // Brief delay to stabilize power
+
+  // Speaker Amplifier Control (start disabled)
+  pinMode(SPEAKER_AMP_ENABLE, OUTPUT);
+  digitalWrite(SPEAKER_AMP_ENABLE, LOW);  // Amp disabled by default
+
+  // Battery Voltage Monitoring (optional)
+  pinMode(BATTERY_ADC_PIN, INPUT);
+  analogSetAttenuation(ADC_11db);  // ~0-3.3V input range
+#endif
+  // ===============================================================
+
   // Initialize the serial communication at 115200 baud rate
   Serial.begin(115200);
   // Wait for the serial port to be ready
@@ -508,7 +585,11 @@ void setup() {
   request_display_line2("");
 
   // Initialize the I2S bus for audio input
+#ifdef BOARD_AIPI_LITE
+  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_LRCLK, AUDIO_INPUT_DIN);
+#else
   audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
+#endif
   // Initialize the I2S bus for audio output
   i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT);
   // Set default volume to ~half (range 0-21)

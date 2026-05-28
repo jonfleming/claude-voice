@@ -12,6 +12,17 @@ void audio_input_init(uint8_t sck, uint8_t ws, uint8_t din) {
     Serial.println("I2S bus initialized at 16kHz.");
 }
 
+// Audio input init with MCLK pin (required for AIPI-Lite ES8311 codec)
+void audio_input_init_mclk(uint8_t mclk, uint8_t sck, uint8_t ws, uint8_t din) {
+    i2s_input.setPins(mclk, sck, ws, din);
+    // Use 16kHz directly to match backend and avoid downsampling artifacts
+    if (!i2s_input.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
+        Serial.println("Failed to initialize I2S bus!");
+        return;
+    }
+    Serial.println("I2S bus initialized at 16kHz (with MCLK).");
+}
+
 void audio_input_deinit(void)
 { 
     i2s_input.end(); 
