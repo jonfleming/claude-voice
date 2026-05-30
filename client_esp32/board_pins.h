@@ -8,7 +8,7 @@
 // To build for AIPI Lite: define BOARD_AIPI_LITE
 //   - Add -DBOARD_AIPI_LITE in build flags, or
 //   - uncomment the line below for quick toggling in the IDE.
-#define BOARD_AIPI_LITE
+// #define BOARD_AIPI_LITE
 // =============================================================================
 
 #ifdef BOARD_AIPI_LITE
@@ -29,7 +29,6 @@
 #define DISPLAY_SPI_DC             7
 #define DISPLAY_SPI_RST           18
 #define DISPLAY_SPI_BL             3
-#define TFT_BL                     DISPLAY_SPI_BL
 
 // User inputs
 #define BUTTON_PIN_LEFT            1
@@ -59,7 +58,8 @@
 
 // --- Freenove ESP32-S3 Media Kit pin profile ---
 
-#define TFT_BL                    20
+#define DISPLAY_SPI_BL             2
+#define DISPLAY_SPI_RST           20
 #define BUTTON_PIN                19
 
 // Audio input (I2S)

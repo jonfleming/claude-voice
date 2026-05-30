@@ -6,9 +6,7 @@
 #include "TFT_eSPI.h"
 #include "driver_button.h"
 
-// Board-profile pin macros (defined in board_pins.h)
-// TFT_BL  - TFT backlight pin
-// BUTTON_PIN - Button input pin
+// BUTTON_PIN is defined in board_pins.h. TFT pin macros come from TFT_eSPI.
 #ifdef BOARD_AIPI_LITE
 #define TFT_DIRECTION 3           // AIPI Lite landscape orientation
 #else
