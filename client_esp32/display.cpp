@@ -1,13 +1,3 @@
-<<<<<<< HEAD
-#include <TFT_eSPI.h>
-
-#include "display.h"
-#include "board_pins.h"
-
-// Board-profile button pin (defined in board_pins.h)
-// On Freenove: BUTTON_PIN = 19 (analog ADC pin)
-// On AIPI-Lite: BUTTON_PIN = 42 (digital GPIO)
-=======
 #include <TFT_eSPI.h>
 #include <SPI.h>
 
@@ -16,7 +6,6 @@
 #ifndef BUTTON_PIN
 #define BUTTON_PIN 19   // Freenove default; overridden by board_pins.h for other boards
 #endif
->>>>>>> 05405f9 (testing)
 
 lv_indev_t *indev_keypad; // External declaration of the keypad input device
 
