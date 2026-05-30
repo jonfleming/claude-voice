@@ -22,7 +22,7 @@ arduino-cli upload
 arduino-cli monitor
 ```
 
-Board config: `esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=huge_app,PSRAM=opi,CDCOnBoot=cdc`
+Board config: `esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=fatflash,PSRAM=opi,CDCOnBoot=cdc,USBMode=tinyusb,UploadSpeed=115200`
 
 ## Architecture
 

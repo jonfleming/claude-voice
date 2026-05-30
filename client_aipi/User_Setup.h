@@ -18,6 +18,9 @@
 #define TFT_RST    18      // GPIO18 - Reset pin
 #define TFT_BL     3       // GPIO3  - Backlight PWM
 
+// Explicit SPI host selection for ESP32-S3 with TFT_eSPI.
+#define USE_HSPI_PORT
+
 // ========== SPI FREQUENCY ==========
 #define SPI_FREQUENCY  27000000  // 27 MHz SPI clock
 

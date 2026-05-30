@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 #include <TFT_eSPI.h>
 
 #include "display.h"
@@ -6,6 +7,16 @@
 // Board-profile button pin (defined in board_pins.h)
 // On Freenove: BUTTON_PIN = 19 (analog ADC pin)
 // On AIPI-Lite: BUTTON_PIN = 42 (digital GPIO)
+=======
+#include <TFT_eSPI.h>
+#include <SPI.h>
+
+#include "display.h"
+
+#ifndef BUTTON_PIN
+#define BUTTON_PIN 19   // Freenove default; overridden by board_pins.h for other boards
+#endif
+>>>>>>> 05405f9 (testing)
 
 lv_indev_t *indev_keypad; // External declaration of the keypad input device
 
@@ -16,6 +27,9 @@ static const uint16_t screenHeight = 240;
 #elif defined FNK0102B_3P5_320x480_ST7796
 static const uint16_t screenWidth = 320;
 static const uint16_t screenHeight = 480;
+#elif defined AIPI_LITE_128x128_ST7735
+static const uint16_t screenWidth = 128;
+static const uint16_t screenHeight = 128;
 #endif
 
 // Buffer for drawing
@@ -26,7 +40,9 @@ static lv_color_t buf[screenWidth * screenHeight / 5];
 TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight);
 
 // Button instance
+#ifndef DISPLAY_DISABLE_KEYPAD_INPUT
 Button button(BUTTON_PIN);
+#endif
 
 // Display instance
 Display display;
@@ -80,7 +96,10 @@ void layout_display_labels(Display &display_instance)
     }
   }
 
-  lv_obj_invalidate(lv_scr_act());
+  lv_obj_t *active_screen = lv_scr_act();
+  if (active_screen) {
+    lv_obj_invalidate(active_screen);
+  }
 }
 
 } // namespace
@@ -108,6 +127,7 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
 }
 
 // Keypad read function
+#ifndef DISPLAY_DISABLE_KEYPAD_INPUT
 void my_keypad_read(lv_indev_drv_t *drv, lv_indev_data_t *data)
 {
   static int last_key = 0; // Static variable to store the last key value
@@ -179,28 +199,45 @@ void my_keypad_read(lv_indev_drv_t *drv, lv_indev_data_t *data)
   last_key = act_key;   // Update the last key value
   data->key = last_key; // Set the key value in the input device data
 }
+#endif
 
 void tftRst(void) {
+  log("tftRst", "Backlight reset sequence start");
   pinMode(TFT_BL, OUTPUT);
+  log("tftRst", "Backlight pin set to OUTPUT");
   digitalWrite(TFT_BL, LOW);
+  log("tftRst", "Backlight turned OFF");
   delay(50);
   digitalWrite(TFT_BL, HIGH);
+  log("tftRst", "Backlight turned ON");
   delay(50);
 }
 
 // Setup the TFT display
 void setupTFT(int direction)
 {
+  log("setupTFT", "Setting up TFT display");
   tftRst();
+  log("setupTFT", "TFT reset complete");
   display.setTftShowDirection(direction);
+  log("setupTFT", "tft_show_direction set");
+
+  // Explicitly initialize SPI pins before TFT_eSPI driver init on ESP32-S3.
+  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
+  log("setupTFT", "SPI.begin complete");
+
   tft.begin();                                    // Initialize the TFT
+  log("setupTFT", "TFT initialization complete");
   tft.setRotation(display.getTftShowDirection()); // Set the rotation of the TFT using the tft_show_dirction macro
+  log("setupTFT", "TFT rotation set");
 }
 
 // Setup the button
 void setupButton()
 {
+#ifndef DISPLAY_DISABLE_KEYPAD_INPUT
   button.init(); // Initialize the button
+#endif
 }
 
 // Setup LVGL
@@ -242,11 +279,15 @@ void setupLVGL()
   lv_disp_drv_register(&disp_drv);   // Register the display driver
 
   // Initialize the input device driver
+#ifndef DISPLAY_DISABLE_KEYPAD_INPUT
   static lv_indev_drv_t indev_drv;
   lv_indev_drv_init(&indev_drv);
   indev_drv.type = LV_INDEV_TYPE_KEYPAD;            // Set the input device type to keypad
   indev_drv.read_cb = my_keypad_read;               // Set the read callback
   indev_keypad = lv_indev_drv_register(&indev_drv); // Register the input device driver
+#else
+  indev_keypad = nullptr;
+#endif
 }
 
 // Initialize the display
@@ -272,7 +313,13 @@ void Display::showBootInstructions(const char* text)
   }
 
   // Create a label on the active screen and save the pointer
-  boot_label = lv_label_create(lv_scr_act());
+  lv_obj_t *active_screen = lv_scr_act();
+  if (!active_screen) {
+    log("boot_label", "LVGL active screen is null");
+    return;
+  }
+
+  boot_label = lv_label_create(active_screen);
   lv_label_set_long_mode(boot_label, LV_LABEL_LONG_WRAP);
   lv_label_set_text(boot_label, text);
   lv_obj_set_style_text_align(boot_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -300,7 +347,13 @@ void Display::displayLine1(const char* text)
   }
 
   // Create label, enable wrapping, and position below the boot label (or near top)
-  line1_label = lv_label_create(lv_scr_act());
+  lv_obj_t *active_screen = lv_scr_act();
+  if (!active_screen) {
+    log("line1_label", "LVGL active screen is null");
+    return;
+  }
+
+  line1_label = lv_label_create(active_screen);
   lv_label_set_long_mode(line1_label, LV_LABEL_LONG_WRAP);
   lv_label_set_text(line1_label, text);
   layout_display_labels(*this);
@@ -317,7 +370,13 @@ void Display::displayLine2(const char* text)
   }
 
   // Create label, enable wrapping, and position below line1_label (or near top)
-  line2_label = lv_label_create(lv_scr_act());
+  lv_obj_t *active_screen = lv_scr_act();
+  if (!active_screen) {
+    log("line2_label", "LVGL active screen is null");
+    return;
+  }
+
+  line2_label = lv_label_create(active_screen);
   lv_label_set_long_mode(line2_label, LV_LABEL_LONG_WRAP);
   lv_label_set_text(line2_label, text);
   layout_display_labels(*this);

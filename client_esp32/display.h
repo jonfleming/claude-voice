@@ -1,16 +1,36 @@
+<<<<<<< HEAD
 #ifndef __DISPLAY_H
 #define __DISPLAY_H
 
+#include "board_pins.h"
 #include "lvgl.h"
 #include "TFT_eSPI.h"
 #include "driver_button.h"
-#include "board_pins.h"
 
 // Board-profile pin macros (defined in board_pins.h)
 // TFT_BL  - TFT backlight pin
 // BUTTON_PIN - Button input pin
-#define TFT_DIRECTION 1           // Define the direction of the TFT display
+#ifdef BOARD_AIPI_LITE
+#define TFT_DIRECTION 3           // AIPI Lite landscape orientation
+#else
+#define TFT_DIRECTION 1           // Freenove landscape orientation
+#endif
 extern lv_indev_t* indev_keypad;  // External declaration of the keypad input device
+=======
+#ifndef __DISPLAY_H
+#define __DISPLAY_H
+
+#include "board_pins.h"
+#include "lvgl.h"
+#include "TFT_eSPI.h"
+#include "driver_button.h"
+#ifdef AIPI_LITE_128x128_ST7735
+#define TFT_DIRECTION 3           // AIPI Lite landscape orientation
+#else
+#define TFT_DIRECTION 1           // Freenove landscape orientation
+#endif
+extern lv_indev_t* indev_keypad;  // External declaration of the keypad input device
+>>>>>>> 05405f9 (testing)
 // Class to handle display operations
 class Display {
 private:
