@@ -42,6 +42,12 @@
 #include "../client_esp32/driver_button.h"
 #include "../client_esp32/display.h"
 
+#ifdef BOARD_AIPI_LITE
+#define TEST_SERIAL Serial
+#else
+#define TEST_SERIAL Serial0
+#endif
+
 static uint32_t last_update_ms = 0;
 static uint32_t counter = 0;
 
@@ -52,37 +58,37 @@ void setup() {
   digitalWrite(AIPI_POWER_KEEPALIVE_PIN, HIGH);
 #endif
 
-  Serial.begin(115200);
+  TEST_SERIAL.begin(115200);
   // Wait up to 3 s for a serial monitor; continue without one so the sketch
   // works on battery (native USB-CDC never becomes ready without a host).
   uint32_t serial_wait_start = millis();
-  while (!Serial && (millis() - serial_wait_start < 3000)) {
+  while (!TEST_SERIAL && (millis() - serial_wait_start < 3000)) {
     delay(10);
   }
 
-  Serial.println();
-  Serial.println("Test 01: Display smoke test");
-  Serial.println("Test 01: display");
-  Serial.println("[stage] setup: before display.init");
+  TEST_SERIAL.println();
+  TEST_SERIAL.println("Test 01: Display smoke test");
+  TEST_SERIAL.println("Test 01: display");
+  TEST_SERIAL.println("[stage] setup: before display.init");
 
   display.init(TFT_DIRECTION);
-  Serial.println("[stage] setup: after display.init");
+  TEST_SERIAL.println("[stage] setup: after display.init");
 
   display.showBootInstructions("Test 01: display");
-  Serial.println("[stage] setup: after showBootInstructions");
+  TEST_SERIAL.println("[stage] setup: after showBootInstructions");
 
   display.displayLine1("Display initialized.");
-  Serial.println("[stage] setup: after displayLine1");
+  TEST_SERIAL.println("[stage] setup: after displayLine1");
 
   display.displayLine2("Counter starts now.");
-  Serial.println("[stage] setup: after displayLine2");
+  TEST_SERIAL.println("[stage] setup: after displayLine2");
 
 }
 
 void loop() {
   static bool logged_first_loop = false;
   if (!logged_first_loop) {
-    Serial.println("[stage] loop: entered");
+    TEST_SERIAL.println("[stage] loop: entered");
     logged_first_loop = true;
   }
 
@@ -99,7 +105,7 @@ void loop() {
     snprintf(line2, sizeof(line2), "Uptime: %lu seconds",
       (unsigned long)(millis() / 1000));
 
-    Serial.println(line1);
+    TEST_SERIAL.println(line1);
     display.displayLine1(line1);
     display.displayLine2(line2);
   }

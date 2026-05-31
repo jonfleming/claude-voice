@@ -11,9 +11,12 @@
  */
 
 #include <Arduino.h>
+#include <lvgl.h>
+#include <TFT_eSPI.h>   // Must be configured for ST7735 in User_Setup.h
 
-#include "../client_esp32/driver_button.cpp"
-#include "../client_esp32/display.cpp"
+#include "../client_esp32/board_pins.h"
+#include "../client_esp32/driver_button.h"
+#include "../client_esp32/display.h"
 
 static const int BUTTON_ADC_PIN = 19;
 

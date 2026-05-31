@@ -7,18 +7,22 @@
 #define BUTTON_PIN 19   // Freenove default; overridden by board_pins.h for other boards
 #endif
 
+#ifndef DISPLAY_DEBUG_SERIAL
+#define DISPLAY_DEBUG_SERIAL Serial
+#endif
+
 lv_indev_t *indev_keypad; // External declaration of the keypad input device
 
 // Define screen dimensions
 #ifdef FNK0102A_1P14_135x240_ST7789
 static const uint16_t screenWidth = 135;
 static const uint16_t screenHeight = 240;
-#elif defined FNK0102B_3P5_320x480_ST7796
-static const uint16_t screenWidth = 320;
-static const uint16_t screenHeight = 480;
 #elif defined AIPI_LITE_128x128_ST7735
 static const uint16_t screenWidth = 128;
 static const uint16_t screenHeight = 128;
+#else // Default FNK0102B_3P5_320x480_ST7796
+static const uint16_t screenWidth = 320;
+static const uint16_t screenHeight = 480;
 #endif
 
 // Buffer for drawing
@@ -48,7 +52,7 @@ int get_logical_screen_width()
 }
 
 void log(const char* object, const char* message) {
-  Serial.printf("[display] %s: %s\n", object, message);
+  DISPLAY_DEBUG_SERIAL.printf("[display] %s: %s\n", object, message);
 }
 
 void layout_display_labels(Display &display_instance)
@@ -97,8 +101,8 @@ void layout_display_labels(Display &display_instance)
 /* Serial debugging */
 void my_print(const char *buf)
 {
-  Serial.printf(buf); // Print the buffer to the serial monitor
-  Serial.flush();     // Ensure all data is sent
+  DISPLAY_DEBUG_SERIAL.printf(buf); // Print the buffer to the serial monitor
+  DISPLAY_DEBUG_SERIAL.flush();     // Ensure all data is sent
 }
 #endif
 
