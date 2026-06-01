@@ -1,3 +1,4 @@
+#include "../client_esp32_test_01_display/sketch_config.h"
 #include "driver_button.h"
 
 Button::Button(int pin): pin(pin) {

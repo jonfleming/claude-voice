@@ -8,7 +8,7 @@
 // To build for AIPI Lite: define BOARD_AIPI_LITE
 //   - Add -DBOARD_AIPI_LITE in build flags, or
 //   - uncomment the line below for quick toggling in the IDE.
-//#define BOARD_AIPI_LITE
+#define BOARD_AIPI_LITE
 // =============================================================================
 
 #ifdef BOARD_AIPI_LITE

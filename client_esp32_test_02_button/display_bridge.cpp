@@ -2,6 +2,7 @@
 // Load board selection before display.cpp includes TFT_eSPI.
 #include "sketch_config.h"
 #include "../client_esp32/board_pins.h"
+#define DISPLAY_DISABLE_KEYPAD_INPUT
 #ifdef BOARD_AIPI_LITE
 #define DISPLAY_DEBUG_SERIAL Serial
 #else

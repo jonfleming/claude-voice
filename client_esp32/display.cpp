@@ -294,9 +294,13 @@ void setupLVGL()
 // Initialize the display
 void Display::init(int screenDir)
 {
+  log("Display::init", "Initializing display");
   setupTFT(screenDir); // Setup the TFT display
+  log("Display::init", "TFT setup complete");
   setupButton();       // Setup the button
+  log("Display::init", "Button setup complete");
   setupLVGL();         // Setup LVGL
+  log("Display::init", "LVGL setup complete");
 }
 
 // Create a small instruction label at the top of the screen.

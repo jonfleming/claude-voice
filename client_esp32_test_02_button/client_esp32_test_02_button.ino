@@ -25,7 +25,11 @@
 #define TEST_SERIAL Serial0
 #endif
 
+#ifdef BOARD_AIPI_LITE
+static const int BUTTON_INPUT_PIN = BUTTON_PIN_RIGHT;
+#else
 static const int BUTTON_INPUT_PIN = BUTTON_PIN;
+#endif
 
 static int last_button_state = Button::KEY_STATE_IDLE;
 static uint32_t press_count = 0;
@@ -61,6 +65,8 @@ void setup() {
   TEST_SERIAL.println("[stage] setup: before display.init");
   display.init(TFT_DIRECTION);
   TEST_SERIAL.println("[stage] setup: after display.init");
+  button.init();
+  TEST_SERIAL.println("[stage] setup: after button.init");
   display.showBootInstructions("Test 02: button");
   display.displayLine1("Press the board button.");
   display.displayLine2("Waiting for input...");
