@@ -10,11 +10,16 @@ Button::Button(int pin): pin(pin) {
 }
 
 void Button::init() {
+#ifdef BOARD_AIPI_LITE
+  pinMode(pin, INPUT_PULLUP);
+  set_threshold_range(0);
+#else
   int thresholds[] = { 2800, 0, 700, 2000, 1350, 2600};
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
   set_voltage_thresholds(thresholds);
   set_threshold_range(100);
+#endif
 }
 
 void Button::set_voltage_thresholds(const int thresholds[6]) {
@@ -28,6 +33,10 @@ void Button::set_threshold_range(int range) {
 }
 
 void Button::key_scan() {
+#ifdef BOARD_AIPI_LITE
+  const bool pressed = digitalRead(pin) == LOW;
+  btnVolt = pressed ? Volt_000 : Volt_330;
+#else
   // Use raw ADC reading instead of analogReadMilliVolts() to avoid
   // adc_oneshot driver calls that can intermittently fail on some cores.
   // Convert raw ADC value to an approximate millivolt value for
@@ -45,6 +54,7 @@ void Button::key_scan() {
       break;
     }
   }
+#endif
 
   if (lastPinState != pinState && pinState != KEY_STATE_IDLE) {
     lastPinState = pinState;

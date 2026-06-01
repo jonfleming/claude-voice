@@ -1,8 +1,8 @@
 /*
- * Test 02: Button input test for the Freenove ESP32-S3 Media Kit.
+ * Test 02: Button input test for the Freenove ESP32-S3 Media Kit / AIPI Lite.
  *
  * Goal:
- *   Verify the analog button path on GPIO 19 and confirm the debounced
+ *   Verify the board button path and confirm the debounced
  *   press/release states from the shared Button driver.
  *
  * Expected result:
@@ -18,7 +18,13 @@
 #include "../client_esp32/driver_button.h"
 #include "../client_esp32/display.h"
 
-static const int BUTTON_ADC_PIN = 19;
+#ifdef BOARD_AIPI_LITE
+#define TEST_SERIAL Serial
+#else
+#define TEST_SERIAL Serial0
+#endif
+
+static const int BUTTON_INPUT_PIN = BUTTON_PIN;
 
 static int last_button_state = Button::KEY_STATE_IDLE;
 static uint32_t press_count = 0;
@@ -36,16 +42,16 @@ const char *button_state_name(int state) {
 }
 
 void setup() {
-  Serial.begin(115200);
-  while (!Serial) {
+  TEST_SERIAL.begin(115200);
+  while (!TEST_SERIAL) {
     delay(10);
   }
 
-  Serial.println();
-  Serial.println("Test 02: Button input test");
+  TEST_SERIAL.println();
+  TEST_SERIAL.println("Test 02: Button input test");
   display.init(TFT_DIRECTION);
   display.showBootInstructions("Test 02: button");
-  display.displayLine1("Press the Freenove button.");
+  display.displayLine1("Press the board button.");
   display.displayLine2("Waiting for input...");
 }
 
@@ -53,12 +59,16 @@ void loop() {
   button.key_scan();
   const int state = button.get_button_state();
   const int key = button.get_button_key_value();
-  const int raw = analogRead(BUTTON_ADC_PIN);
+#ifdef BOARD_AIPI_LITE
+  const int raw = digitalRead(BUTTON_INPUT_PIN);
+#else
+  const int raw = analogRead(BUTTON_INPUT_PIN);
+#endif
 
   if (state == Button::KEY_STATE_PRESSED &&
       last_button_state != Button::KEY_STATE_PRESSED) {
     press_count++;
-    Serial.printf("Button press %lu, key=%d, raw=%d\r\n",
+    TEST_SERIAL.printf("Button press %lu, key=%d, raw=%d\r\n",
       (unsigned long)press_count, key, raw);
   }
   last_button_state = state;
@@ -70,7 +80,11 @@ void loop() {
     char line2[96];
     snprintf(line1, sizeof(line1), "Presses: %lu  State: %s",
       (unsigned long)press_count, button_state_name(state));
+#ifdef BOARD_AIPI_LITE
+    snprintf(line2, sizeof(line2), "Key: %d  GPIO: %d", key, raw);
+#else
     snprintf(line2, sizeof(line2), "Key: %d  Raw ADC: %d", key, raw);
+#endif
 
     display.displayLine1(line1);
     display.displayLine2(line2);

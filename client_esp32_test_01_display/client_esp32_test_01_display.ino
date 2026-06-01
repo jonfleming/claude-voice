@@ -14,7 +14,6 @@
  *     - Add -DBOARD_AIPI_LITE in build flags, or
  *     - Uncomment #define BOARD_AIPI_LITE in client_esp32/board_pins.h.
  */
-
 #ifndef ARDUINO_USB_CDC_ON_BOOT
 #define ARDUINO_USB_CDC_ON_BOOT 1
 #endif
