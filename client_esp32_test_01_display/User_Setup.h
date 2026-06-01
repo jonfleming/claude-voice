@@ -1,6 +1,7 @@
 // User_Setup.h - TFT_eSPI configuration for the display smoke test.
 // Arduino adds the sketch folder to the include path first, so this keeps the
 // smoke test independent from the globally installed TFT_eSPI setup.
+#define BOARD_AIPI_LITE
 
 #ifndef USER_SETUP_H
 #define USER_SETUP_H
@@ -24,6 +25,7 @@
 #define TFT_DC      7
 #define TFT_RST    18
 #define TFT_BL      3
+#define TOUCH_CS   -1
 
 #define USE_HSPI_PORT
 #define SPI_FREQUENCY  27000000
