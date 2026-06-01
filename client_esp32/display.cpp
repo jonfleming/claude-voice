@@ -33,7 +33,9 @@ static lv_color_t buf[screenWidth * screenHeight / 5];
 TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight);
 
 // Button instance
+#ifndef DISPLAY_DISABLE_KEYPAD_INPUT
 Button button(BUTTON_PIN);
+#endif
 
 // Display instance
 Display display;
@@ -196,13 +198,13 @@ void tftRst(void) {
   log("tftRst", "Backlight reset sequence start");
   String logMsg = "TFT_BL=" + String(TFT_BL);
   log("tftRst", logMsg.c_str());
-  // pinMode(TFT_BL, OUTPUT);
-  // log("tftRst", "Backlight pin set to OUTPUT");
-  // digitalWrite(TFT_BL, LOW);
-  // log("tftRst", "Backlight turned OFF");
-  // delay(50);
-  // digitalWrite(TFT_BL, HIGH);
-  // log("tftRst", "Backlight turned ON");
+  pinMode(TFT_BL, OUTPUT);
+  log("tftRst", "Backlight pin set to OUTPUT");
+  digitalWrite(TFT_BL, LOW);
+  log("tftRst", "Backlight turned OFF");
+  delay(50);
+  digitalWrite(TFT_BL, HIGH);
+  log("tftRst", "Backlight turned ON");
   delay(50);
 }
 
@@ -234,7 +236,9 @@ void setupTFT(int direction)
 // Setup the button
 void setupButton()
 {
+#ifndef DISPLAY_DISABLE_KEYPAD_INPUT
   button.init(); // Initialize the button
+#endif
 }
 
 // Setup LVGL
