@@ -11,13 +11,22 @@
  *   then plays the captured audio back as a generated WAV.
  */
 
+#include "sketch_config.h"
+
 #include <Arduino.h>
 #include <math.h>
 
-#include "../client_esp32/driver_button.cpp"
-#include "../client_esp32/display.cpp"
-#include "../client_esp32/driver_audio_input.cpp"
-#include "../client_esp32/driver_audio_output.cpp"
+#include "../client_esp32/board_pins.h"
+#include "../client_esp32/driver_button.h"
+#include "../client_esp32/display.h"
+#include "../client_esp32/driver_audio_output.h"
+#include "../client_esp32/driver_audio_input.h"
+
+#ifdef BOARD_AIPI_LITE
+#define TEST_SERIAL Serial
+#else
+#define TEST_SERIAL Serial0
+#endif
 
 #define AUDIO_INPUT_SCK 3
 #define AUDIO_INPUT_WS 14
