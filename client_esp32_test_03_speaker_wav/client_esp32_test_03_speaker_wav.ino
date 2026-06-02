@@ -2,7 +2,7 @@
  * Test 03: Speaker/DAC/amplifier WAV playback test.
  *
  * Goal:
- *   Verify I2S audio output on the Freenove ESP32-S3 Media Kit.
+ *   Verify I2S audio output on the Freenove ESP32-S3 Media Kit / AIPI Lite.
  *
  * Expected result:
  *   Press the button, or type "p" in the serial monitor, to play a short
@@ -97,9 +97,19 @@ void play_test_wav() {
   display.displayLine1("Playing generated WAV...");
   display.displayLine2("660 Hz, 16 kHz mono");
 
+#ifdef BOARD_AIPI_LITE
+  digitalWrite(SPEAKER_AMP_ENABLE, HIGH);
+  delay(10);
+#endif
+
   player_task_handle = (TaskHandle_t)1;
   i2s_output_wav(wav, wav_size);
   player_task_handle = NULL;
+
+#ifdef BOARD_AIPI_LITE
+  delay(20);
+  digitalWrite(SPEAKER_AMP_ENABLE, LOW);
+#endif
 
   free(wav);
   display.displayLine1("Playback finished.");
@@ -110,6 +120,8 @@ void setup() {
 #ifdef BOARD_AIPI_LITE
   pinMode(AIPI_POWER_KEEPALIVE_PIN, OUTPUT);
   digitalWrite(AIPI_POWER_KEEPALIVE_PIN, HIGH);
+  pinMode(SPEAKER_AMP_ENABLE, OUTPUT);
+  digitalWrite(SPEAKER_AMP_ENABLE, LOW);
 #endif
 
   TEST_SERIAL.begin(115200);
@@ -129,7 +141,15 @@ void setup() {
   display.displayLine1("Press button to play.");
   display.displayLine2("Or send p over serial.");
 
+#ifdef BOARD_AIPI_LITE
+  if (!audio_output_codec_init()) {
+    display.displayLine1("ES8311 init failed.");
+    TEST_SERIAL.println("ES8311 init failed.");
+  }
+  if (!i2s_output_init_mclk(AUDIO_OUTPUT_MCLK, AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
+#else
   if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
+#endif
     display.displayLine1("I2S output init failed.");
     TEST_SERIAL.println("I2S output init failed.");
   }

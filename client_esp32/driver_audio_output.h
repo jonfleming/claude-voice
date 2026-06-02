@@ -6,6 +6,8 @@
 #include "stdint.h"
 
 bool i2s_output_init(int bclk, int lrc, int dout);
+bool i2s_output_init_mclk(int mclk, int bclk, int lrc, int dout);
+bool audio_output_codec_init(void);
 void i2s_output_wav(uint8_t *data, size_t len);
 void i2s_output_deinit(void);
 

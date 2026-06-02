@@ -1,7 +1,9 @@
 
 #include "driver_audio_output.h"
+#include "board_pins.h"
 #include "Audio.h"
 #include <ESP_I2S.h>
+#include <Wire.h>
 
 #ifndef AUDIO_OUTPUT_DEBUG_SERIAL
 #define AUDIO_OUTPUT_DEBUG_SERIAL Serial
@@ -13,9 +15,53 @@ I2SClass i2s_output;
 static uint16_t s_bits_per_sample = 32;
 static uint16_t s_channels = 2;
 static float s_volume_factor = 0.476f; // Default to ~10/21
+static int s_mclk_pin = -1;
+
+namespace {
+
+bool es8311_write(uint8_t reg, uint8_t value) {
+#ifdef BOARD_AIPI_LITE
+  Wire.beginTransmission(ES8311_I2C_ADDR);
+  Wire.write(reg);
+  Wire.write(value);
+  const uint8_t rc = Wire.endTransmission();
+  if (rc != 0) {
+    AUDIO_OUTPUT_DEBUG_SERIAL.printf("ES8311 write 0x%02x failed: %u\r\n", reg, rc);
+    return false;
+  }
+#endif
+  return true;
+}
+
+bool es8311_read(uint8_t reg, uint8_t *value) {
+#ifdef BOARD_AIPI_LITE
+  Wire.beginTransmission(ES8311_I2C_ADDR);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  if (Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)1) != 1) {
+    return false;
+  }
+  *value = Wire.read();
+#else
+  *value = 0;
+#endif
+  return true;
+}
+
+bool es8311_update(uint8_t reg, uint8_t preserve_mask, uint8_t set_bits) {
+  uint8_t value = 0;
+  if (!es8311_read(reg, &value)) {
+    return false;
+  }
+  return es8311_write(reg, (value & preserve_mask) | set_bits);
+}
+
+} // namespace
 
 bool i2s_output_init(int bclk, int lrc, int dout) {
-  i2s_output.setPins(bclk, lrc, dout);
+  i2s_output.setPins(bclk, lrc, dout, -1, s_mclk_pin);
   // Default to 32kHz Stereo 32-bit
   if (!i2s_output.begin(I2S_MODE_STD, 32000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
     AUDIO_OUTPUT_DEBUG_SERIAL.println("Failed to initialize I2S output bus!");
@@ -24,6 +70,62 @@ bool i2s_output_init(int bclk, int lrc, int dout) {
   s_bits_per_sample = 32;
   s_channels = 2;
   return true;
+}
+
+bool i2s_output_init_mclk(int mclk, int bclk, int lrc, int dout) {
+  s_mclk_pin = mclk;
+  return i2s_output_init(bclk, lrc, dout);
+}
+
+bool audio_output_codec_init(void) {
+#ifndef BOARD_AIPI_LITE
+  return true;
+#else
+  Wire.begin(ES8311_I2C_SDA, ES8311_I2C_SCL);
+
+  uint8_t chip_id = 0;
+  if (!es8311_read(0xFD, &chip_id)) {
+    AUDIO_OUTPUT_DEBUG_SERIAL.println("ES8311 not found on I2C address 0x18.");
+    return false;
+  }
+  AUDIO_OUTPUT_DEBUG_SERIAL.printf("ES8311 chip id: 0x%02x\r\n", chip_id);
+
+  bool ok = true;
+  ok &= es8311_write(0x00, 0x1F);
+  ok &= es8311_write(0x00, 0x00);
+
+  // 16 kHz, 16-bit I2S using MCLK = sample_rate * 256 = 4.096 MHz.
+  ok &= es8311_write(0x01, 0x3F);
+  ok &= es8311_update(0x02, 0x07, 0x08);
+  ok &= es8311_write(0x03, 0x10);
+  ok &= es8311_write(0x04, 0x20);
+  ok &= es8311_write(0x05, 0x00);
+  ok &= es8311_update(0x06, 0xE0, 0x03);
+  ok &= es8311_update(0x07, 0xC0, 0x00);
+  ok &= es8311_write(0x08, 0xFF);
+
+  // 16-bit I2S serial data format for DAC and ADC paths.
+  ok &= es8311_update(0x00, 0xBF, 0x00);
+  ok &= es8311_write(0x09, 0x0C);
+  ok &= es8311_write(0x0A, 0x0C);
+
+  ok &= es8311_write(0x14, 0x1A);
+  ok &= es8311_write(0x16, 0x00);
+  ok &= es8311_write(0x17, 0xC8);
+
+  ok &= es8311_write(0x32, 0xBF);
+  ok &= es8311_write(0x0D, 0x01);
+  ok &= es8311_write(0x0E, 0x02);
+  ok &= es8311_write(0x12, 0x00);
+  ok &= es8311_write(0x13, 0x10);
+  ok &= es8311_write(0x1C, 0x6A);
+  ok &= es8311_write(0x37, 0x08);
+  ok &= es8311_update(0x31, 0x9F, 0x00);
+  ok &= es8311_write(0x00, 0x80);
+
+  AUDIO_OUTPUT_DEBUG_SERIAL.println(ok ? "ES8311 codec initialized." : "ES8311 codec init failed.");
+  return ok;
+#endif
 }
 
 extern volatile TaskHandle_t player_task_handle;
@@ -69,6 +171,7 @@ void i2s_output_wav(uint8_t *data, size_t len)
     
     // Always use STEREO mode for hardware compatibility, expansion handled in loop
     i2s_output.end();
+    i2s_output.setPins(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT, -1, s_mclk_pin);
     if (!i2s_output.begin(I2S_MODE_STD, sample_rate, data_bit_width, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
       AUDIO_OUTPUT_DEBUG_SERIAL.println("I2S begin failed, fallback to 32k/32b/Stereo");
       i2s_output.begin(I2S_MODE_STD, 32000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH);
@@ -117,6 +220,7 @@ void i2s_output_wav(uint8_t *data, size_t len)
 
 bool i2s_output_stream_begin(uint32_t sample_rate, uint16_t bits_per_sample, uint16_t channels) {
   i2s_output.end();
+  i2s_output.setPins(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT, -1, s_mclk_pin);
   s_bits_per_sample = bits_per_sample;
   s_channels = channels;
   i2s_data_bit_width_t data_bit_width = (bits_per_sample <= 16) ? I2S_DATA_BIT_WIDTH_16BIT : I2S_DATA_BIT_WIDTH_32BIT;
