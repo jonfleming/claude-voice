@@ -8,17 +8,21 @@
  *   Press the button, or type "p" in the serial monitor, to play a short
  *   generated 16 kHz mono WAV tone through the device speaker path.
  */
+#include "sketch_config.h"
 
 #include <Arduino.h>
 #include <math.h>
 
-#include "../client_esp32/driver_button.cpp"
-#include "../client_esp32/display.cpp"
-#include "../client_esp32/driver_audio_output.cpp"
+#include "../client_esp32/board_pins.h"
+#include "../client_esp32/driver_button.h"
+#include "../client_esp32/display.h"
+#include "../client_esp32/driver_audio_output.h"
 
-#define AUDIO_OUTPUT_BCLK 42
-#define AUDIO_OUTPUT_LRC 41
-#define AUDIO_OUTPUT_DOUT 1
+#ifdef BOARD_AIPI_LITE
+#define TEST_SERIAL Serial
+#else
+#define TEST_SERIAL Serial0
+#endif
 
 volatile TaskHandle_t player_task_handle = NULL;
 
@@ -81,14 +85,14 @@ void play_test_wav() {
   size_t wav_size = 0;
   uint8_t *wav = build_test_wav(&wav_size);
   if (!wav) {
-    Serial.println("Failed to allocate generated WAV buffer.");
+    TEST_SERIAL.println("Failed to allocate generated WAV buffer.");
     display.displayLine1("Playback failed.");
     display.displayLine2("No heap for WAV.");
     return;
   }
 
   play_count++;
-  Serial.printf("Playing generated WAV %lu, bytes=%u\r\n",
+  TEST_SERIAL.printf("Playing generated WAV %lu, bytes=%u\r\n",
     (unsigned long)play_count, (unsigned)wav_size);
   display.displayLine1("Playing generated WAV...");
   display.displayLine2("660 Hz, 16 kHz mono");
@@ -103,21 +107,31 @@ void play_test_wav() {
 }
 
 void setup() {
-  Serial.begin(115200);
-  while (!Serial) {
+#ifdef BOARD_AIPI_LITE
+  pinMode(AIPI_POWER_KEEPALIVE_PIN, OUTPUT);
+  digitalWrite(AIPI_POWER_KEEPALIVE_PIN, HIGH);
+#endif
+
+  TEST_SERIAL.begin(115200);
+  uint32_t serial_wait_start = millis();
+  while (!TEST_SERIAL && (millis() - serial_wait_start < 3000)) {
     delay(10);
   }
 
-  Serial.println();
-  Serial.println("Test 03: Speaker WAV playback test");
+  TEST_SERIAL.println();
+  TEST_SERIAL.println("Test 03: Speaker WAV playback test");
+  TEST_SERIAL.println("[stage] setup: before display.init");
   display.init(TFT_DIRECTION);
+  TEST_SERIAL.println("[stage] setup: after display.init");
+  button.init();
+  TEST_SERIAL.println("[stage] setup: after button.init");
   display.showBootInstructions("Test 03: speaker WAV");
   display.displayLine1("Press button to play.");
   display.displayLine2("Or send p over serial.");
 
   if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
     display.displayLine1("I2S output init failed.");
-    Serial.println("I2S output init failed.");
+    TEST_SERIAL.println("I2S output init failed.");
   }
   audio_output_set_volume(10);
 }
@@ -131,8 +145,8 @@ void loop() {
   }
   last_button_state = state;
 
-  if (Serial.available()) {
-    const char c = Serial.read();
+  if (TEST_SERIAL.available()) {
+    const char c = TEST_SERIAL.read();
     if (c == 'p' || c == 'P') {
       play_test_wav();
     }

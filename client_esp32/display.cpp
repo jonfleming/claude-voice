@@ -32,11 +32,6 @@ static lv_color_t buf[screenWidth * screenHeight / 5];
 // TFT instance
 TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight);
 
-// Button instance
-#ifndef DISPLAY_DISABLE_KEYPAD_INPUT
-Button button(BUTTON_PIN);
-#endif
-
 // Display instance
 Display display;
 
@@ -233,14 +228,6 @@ void setupTFT(int direction)
   log("setupTFT", "TFT rotation set");
 }
 
-// Setup the button
-void setupButton()
-{
-#ifndef DISPLAY_DISABLE_KEYPAD_INPUT
-  button.init(); // Initialize the button
-#endif
-}
-
 // Setup LVGL
 void setupLVGL()
 {
@@ -295,7 +282,6 @@ void setupLVGL()
 void Display::init(int screenDir)
 {
   setupTFT(screenDir); // Setup the TFT display
-  setupButton();       // Setup the button
   setupLVGL();         // Setup LVGL
 }
 

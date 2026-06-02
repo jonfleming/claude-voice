@@ -3,8 +3,12 @@
 #include "Audio.h"
 #include <ESP_I2S.h>
 
+#ifndef AUDIO_OUTPUT_DEBUG_SERIAL
+#define AUDIO_OUTPUT_DEBUG_SERIAL Serial
+#endif
+
 Audio audio;
-I2SClass i2s_output; 
+I2SClass i2s_output;
 
 static uint16_t s_bits_per_sample = 32;
 static uint16_t s_channels = 2;
@@ -14,7 +18,7 @@ bool i2s_output_init(int bclk, int lrc, int dout) {
   i2s_output.setPins(bclk, lrc, dout);
   // Default to 32kHz Stereo 32-bit
   if (!i2s_output.begin(I2S_MODE_STD, 32000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
-    Serial.println("Failed to initialize I2S output bus!");
+    AUDIO_OUTPUT_DEBUG_SERIAL.println("Failed to initialize I2S output bus!");
     return false;
   }
   s_bits_per_sample = 32;
@@ -56,7 +60,7 @@ void i2s_output_wav(uint8_t *data, size_t len)
       if (csize & 1) offset++;
     }
 
-    Serial.printf("WAV: rate=%u, ch=%u, bits=%u, off=%u, sz=%u\r\n", sample_rate, channels, bits_per_sample, (unsigned)data_offset, (unsigned)data_size);
+    AUDIO_OUTPUT_DEBUG_SERIAL.printf("WAV: rate=%u, ch=%u, bits=%u, off=%u, sz=%u\r\n", sample_rate, channels, bits_per_sample, (unsigned)data_offset, (unsigned)data_size);
 
     s_bits_per_sample = bits_per_sample;
     s_channels = channels;
@@ -66,7 +70,7 @@ void i2s_output_wav(uint8_t *data, size_t len)
     // Always use STEREO mode for hardware compatibility, expansion handled in loop
     i2s_output.end();
     if (!i2s_output.begin(I2S_MODE_STD, sample_rate, data_bit_width, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
-      Serial.println("I2S begin failed, fallback to 32k/32b/Stereo");
+      AUDIO_OUTPUT_DEBUG_SERIAL.println("I2S begin failed, fallback to 32k/32b/Stereo");
       i2s_output.begin(I2S_MODE_STD, 32000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH);
       s_bits_per_sample = 32;
       s_channels = 2;
@@ -237,11 +241,11 @@ void audio_output_loop(void) {
 
 // optional
 void audio_info(const char *info) {
-  Serial.print("info        ");
-  Serial.println(info);
+  AUDIO_OUTPUT_DEBUG_SERIAL.print("info        ");
+  AUDIO_OUTPUT_DEBUG_SERIAL.println(info);
 }
 
-void audio_eof_mp3(const char *info) {  
-  Serial.print("eof_mp3     ");
-  Serial.println(info);
+void audio_eof_mp3(const char *info) {
+  AUDIO_OUTPUT_DEBUG_SERIAL.print("eof_mp3     ");
+  AUDIO_OUTPUT_DEBUG_SERIAL.println(info);
 }
