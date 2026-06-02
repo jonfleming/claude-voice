@@ -54,6 +54,8 @@
 #define AUDIO_OUTPUT_LRC          AUDIO_OUTPUT_LRCLK
 #define AUDIO_OUTPUT_DOUT         11
 
+#define TOUCH_CS                  -1
+
 #else
 
 // --- Freenove ESP32-S3 Media Kit pin profile ---
@@ -71,6 +73,8 @@
 #define AUDIO_OUTPUT_BCLK         42
 #define AUDIO_OUTPUT_LRC          41
 #define AUDIO_OUTPUT_DOUT          1
+
+#define TOUCH_CS                  -1
 
 #endif  // BOARD_AIPI_LITE
 

@@ -99,7 +99,7 @@ void record_and_playback() {
   wav_buffer_size = 44 + MAX_PCM_BYTES;
   wav_buffer = (uint8_t *)malloc(wav_buffer_size);
   if (!wav_buffer) {
-    Serial.println("Failed to allocate recording WAV buffer.");
+    TEST_SERIAL.println("Failed to allocate recording WAV buffer.");
     display.displayLine1("Record failed.");
     display.displayLine2("No heap for WAV.");
     return;
@@ -114,7 +114,7 @@ void record_and_playback() {
   uint32_t peak = 0;
   double sum_squares = 0.0;
 
-  Serial.println("Recording...");
+  TEST_SERIAL.println("Recording...");
   display.displayLine1("Recording for 3 seconds...");
   display.displayLine2("Speak near the microphone.");
 
@@ -158,7 +158,7 @@ void record_and_playback() {
   wav_buffer_size = 44 + pcm_written;
 
   const double rms = samples_seen > 0 ? sqrt(sum_squares / samples_seen) : 0.0;
-  Serial.printf("Recording complete: bytes=%u, peak=%lu, rms=%.0f\r\n",
+  TEST_SERIAL.printf("Recording complete: bytes=%u, peak=%lu, rms=%.0f\r\n",
     (unsigned)wav_buffer_size, (unsigned long)peak, rms);
 
   char line1[96];
@@ -170,7 +170,7 @@ void record_and_playback() {
   display.displayLine2(line2);
   delay(700);
 
-  Serial.println("Playing recording back...");
+  TEST_SERIAL.println("Playing recording back...");
   display.displayLine1("Playing recording back...");
   display.displayLine2("Listen for your voice.");
   player_task_handle = (TaskHandle_t)1;
@@ -182,22 +182,44 @@ void record_and_playback() {
 }
 
 void setup() {
-  Serial.begin(115200);
-  while (!Serial) {
+#ifdef BOARD_AIPI_LITE
+  pinMode(AIPI_POWER_KEEPALIVE_PIN, OUTPUT);
+  digitalWrite(AIPI_POWER_KEEPALIVE_PIN, HIGH);
+  pinMode(SPEAKER_AMP_ENABLE, OUTPUT);
+  digitalWrite(SPEAKER_AMP_ENABLE, LOW);
+#endif
+
+  TEST_SERIAL.begin(115200);
+  uint32_t serial_wait_start = millis();
+  while (!TEST_SERIAL && (millis() - serial_wait_start < 3000)) {
     delay(10);
   }
 
-  Serial.println();
-  Serial.println("Test 04: Microphone recording test");
+  TEST_SERIAL.println();
+  TEST_SERIAL.println("Test 04: Microphone recording test");
+  TEST_SERIAL.println("[stage] setup: before display.init");
   display.init(TFT_DIRECTION);
+  TEST_SERIAL.println("[stage] setup: after display.init");
+  button.init();
+  TEST_SERIAL.println("[stage] setup: after button.init");
   display.showBootInstructions("Test 04: microphone");
   display.displayLine1("Press button to record.");
   display.displayLine2("Or send r over serial.");
 
-  audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
-  if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
-    Serial.println("I2S output init failed.");
+#ifdef BOARD_AIPI_LITE
+  if (!audio_output_codec_init()) {
+    display.displayLine1("ES8311 init failed.");
+    TEST_SERIAL.println("ES8311 init failed.");
   }
+  if (!i2s_output_init_mclk(AUDIO_OUTPUT_MCLK, AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
+#else
+  if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
+#endif
+    display.displayLine1("I2S output init failed.");
+    TEST_SERIAL.println("I2S output init failed.");
+  }
+
+  audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
   audio_output_set_volume(10);
 }
 
@@ -210,8 +232,8 @@ void loop() {
   }
   last_button_state = state;
 
-  if (Serial.available()) {
-    const char c = Serial.read();
+  if (TEST_SERIAL.available()) {
+    const char c = TEST_SERIAL.read();
     if (c == 'r' || c == 'R') {
       record_and_playback();
     }
