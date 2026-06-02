@@ -9,6 +9,7 @@
  *   Pressing the button increments the press count. The display and serial
  *   monitor show the current raw ADC value, decoded key value, and state.
  */
+#include "sketch_config.h"
 
 #include <Arduino.h>
 #include <lvgl.h>
@@ -24,7 +25,11 @@
 #define TEST_SERIAL Serial0
 #endif
 
+#ifdef BOARD_AIPI_LITE
+static const int BUTTON_INPUT_PIN = BUTTON_PIN_RIGHT;
+#else
 static const int BUTTON_INPUT_PIN = BUTTON_PIN;
+#endif
 
 static int last_button_state = Button::KEY_STATE_IDLE;
 static uint32_t press_count = 0;
@@ -42,14 +47,24 @@ const char *button_state_name(int state) {
 }
 
 void setup() {
+#ifdef BOARD_AIPI_LITE
+  pinMode(AIPI_POWER_KEEPALIVE_PIN, OUTPUT);
+  digitalWrite(AIPI_POWER_KEEPALIVE_PIN, HIGH);
+#endif
+
   TEST_SERIAL.begin(115200);
-  while (!TEST_SERIAL) {
+  uint32_t serial_wait_start = millis();
+  while (!TEST_SERIAL && (millis() - serial_wait_start < 3000)) {
     delay(10);
   }
 
   TEST_SERIAL.println();
   TEST_SERIAL.println("Test 02: Button input test");
+  TEST_SERIAL.println("[stage] setup: before display.init");
   display.init(TFT_DIRECTION);
+  TEST_SERIAL.println("[stage] setup: after display.init");
+  button.init();
+  TEST_SERIAL.println("[stage] setup: after button.init");
   display.showBootInstructions("Test 02: button");
   display.displayLine1("Press the board button.");
   display.displayLine2("Waiting for input...");
