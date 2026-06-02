@@ -121,6 +121,15 @@ bool audio_output_codec_init(void) {
   ok &= es8311_write(0x1C, 0x6A);
   ok &= es8311_write(0x37, 0x08);
   ok &= es8311_update(0x31, 0x9F, 0x00);
+
+  // Enable the ES8311 microphone ADC path for capture tests.
+  // This mirrors the ES8311 setup sequence used by the working ESPHome config.
+  ok &= es8311_write(0x14, 0x1A);
+  ok &= es8311_write(0x16, 0x00);
+  ok &= es8311_write(0x17, 0xC8);
+  ok &= es8311_write(0x0D, 0x01);
+  ok &= es8311_write(0x0E, 0x02);
+
   ok &= es8311_write(0x00, 0x80);
 
   AUDIO_OUTPUT_DEBUG_SERIAL.println(ok ? "ES8311 codec initialized." : "ES8311 codec init failed.");

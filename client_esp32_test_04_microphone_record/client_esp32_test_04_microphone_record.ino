@@ -28,14 +28,6 @@
 #define TEST_SERIAL Serial0
 #endif
 
-#define AUDIO_INPUT_SCK 3
-#define AUDIO_INPUT_WS 14
-#define AUDIO_INPUT_DIN 46
-
-#define AUDIO_OUTPUT_BCLK 42
-#define AUDIO_OUTPUT_LRC 41
-#define AUDIO_OUTPUT_DOUT 1
-
 volatile TaskHandle_t player_task_handle = NULL;
 
 static const uint32_t SAMPLE_RATE = 16000;
@@ -45,6 +37,7 @@ static const uint32_t MAX_PCM_BYTES = SAMPLE_RATE * RECORD_SECONDS * sizeof(int1
 static int last_button_state = Button::KEY_STATE_IDLE;
 static uint8_t *wav_buffer = NULL;
 static size_t wav_buffer_size = 0;
+static int selected_i2s_lane = -1;
 
 void write_u16_le(uint8_t *p, uint16_t value) {
   p[0] = value & 0xff;
@@ -74,15 +67,16 @@ void write_wav_header(uint8_t *wav, uint32_t data_size) {
   write_u32_le(wav + 40, data_size);
 }
 
-int16_t convert_i2s_frame_to_pcm16(const int32_t *frame) {
+int16_t convert_i2s_frame_to_pcm16(const int32_t *frame, int lane) {
   static float dc_offset = 0.0f;
-  const float alpha = 0.999f;
-  const float gain = 12.0f;
+  const float alpha = 0.995f;
 
-  const int32_t mixed = frame[0] + frame[1];
-  dc_offset = (alpha * dc_offset) + ((1.0f - alpha) * (float)mixed);
-  float filtered = (float)mixed - dc_offset;
-  float amplified = (filtered * gain) / 65536.0f;
+  const int32_t raw = frame[lane];
+  dc_offset = (alpha * dc_offset) + ((1.0f - alpha) * (float)raw);
+  float filtered = (float)raw - dc_offset;
+
+  // Conservative conversion from 32-bit lane to 16-bit PCM.
+  float amplified = filtered / 131072.0f;
 
   if (amplified > 32767.0f) amplified = 32767.0f;
   if (amplified < -32768.0f) amplified = -32768.0f;
@@ -113,6 +107,7 @@ void record_and_playback() {
   uint32_t samples_seen = 0;
   uint32_t peak = 0;
   double sum_squares = 0.0;
+  selected_i2s_lane = -1;
 
   TEST_SERIAL.println("Recording...");
   display.displayLine1("Recording for 3 seconds...");
@@ -133,8 +128,23 @@ void record_and_playback() {
     const int32_t *frames = (const int32_t *)input_chunk;
     const size_t frame_count = read_size / 8;
 
+    if (selected_i2s_lane < 0 && frame_count > 0) {
+      uint64_t lane0_energy = 0;
+      uint64_t lane1_energy = 0;
+      const size_t lane_probe_count = frame_count < 64 ? frame_count : 64;
+      for (size_t i = 0; i < lane_probe_count; i++) {
+        lane0_energy += (uint64_t)llabs((long long)frames[i * 2]);
+        lane1_energy += (uint64_t)llabs((long long)frames[i * 2 + 1]);
+      }
+      selected_i2s_lane = (lane1_energy > lane0_energy) ? 1 : 0;
+      TEST_SERIAL.printf("I2S lane select: lane0=%llu lane1=%llu chosen=%d\r\n",
+        (unsigned long long)lane0_energy,
+        (unsigned long long)lane1_energy,
+        selected_i2s_lane);
+    }
+
     for (size_t i = 0; i < frame_count && pcm_written < MAX_PCM_BYTES; i++) {
-      const int16_t sample = convert_i2s_frame_to_pcm16(frames + (i * 2));
+      const int16_t sample = convert_i2s_frame_to_pcm16(frames + (i * 2), selected_i2s_lane < 0 ? 0 : selected_i2s_lane);
       ((int16_t *)pcm_out)[pcm_written / 2] = sample;
       pcm_written += sizeof(int16_t);
 
@@ -173,9 +183,17 @@ void record_and_playback() {
   TEST_SERIAL.println("Playing recording back...");
   display.displayLine1("Playing recording back...");
   display.displayLine2("Listen for your voice.");
+#ifdef BOARD_AIPI_LITE
+  digitalWrite(SPEAKER_AMP_ENABLE, HIGH);
+  delay(10);
+#endif
   player_task_handle = (TaskHandle_t)1;
   i2s_output_wav(wav_buffer, wav_buffer_size);
   player_task_handle = NULL;
+#ifdef BOARD_AIPI_LITE
+  delay(20);
+  digitalWrite(SPEAKER_AMP_ENABLE, LOW);
+#endif
 
   display.displayLine1("Microphone test complete.");
   display.displayLine2("Press button or send r.");
@@ -211,15 +229,15 @@ void setup() {
     display.displayLine1("ES8311 init failed.");
     TEST_SERIAL.println("ES8311 init failed.");
   }
+  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
   if (!i2s_output_init_mclk(AUDIO_OUTPUT_MCLK, AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
 #else
+  audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
   if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
 #endif
     display.displayLine1("I2S output init failed.");
     TEST_SERIAL.println("I2S output init failed.");
   }
-
-  audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
   audio_output_set_volume(10);
 }
 
