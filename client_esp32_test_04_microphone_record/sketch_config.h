@@ -1,5 +1,5 @@
-#ifndef TEST_02_BUTTON_SKETCH_CONFIG_H
-#define TEST_02_BUTTON_SKETCH_CONFIG_H
+#ifndef TEST_04_MICROPHONE_RECORD_SKETCH_CONFIG_H
+#define TEST_04_MICROPHONE_RECORD_SKETCH_CONFIG_H
 
 // Test 02 is currently configured for AIPI Lite.
 // Comment this out to build the same sketch for Freenove.
