@@ -97,9 +97,6 @@ SemaphoreHandle_t ws_mutex = NULL;
 // Ollama model to use for generation (change as needed)
 #define OLLAMA_MODEL "llama3.2"
 
-// Global button instance is declared in `driver_button.h` and defined in `display.cpp`.
-// Use the shared `button` instance (defined in display.cpp) via the extern declaration.
-
 // Save wav data
 uint8_t *wav_buffer;
 // Size of the last recorded buffer stored in PSRAM
@@ -444,6 +441,8 @@ void claude_ws_on_message(WebsocketsMessage message) {
       // ======================================================
 
       player_task_handle = NULL;
+    }
+
     return;
   }
 

@@ -1,4 +1,5 @@
 #include "driver_button.h"
+#include "board_pins.h"
 
 Button::Button(int pin): pin(pin) {
   // Initialize variables

@@ -45,7 +45,7 @@ private:
   int thresholdRange;
 };
 
-// Global button instance defined in one translation unit (display.cpp).
+// Global button instance defined in one translation unit (driver_button.cpp).
 // Other files should include this header and use the extern declaration.
 extern Button button;
 

@@ -3,7 +3,7 @@
 
 // Test 02 is currently configured for AIPI Lite.
 // Comment this out to build the same sketch for Freenove.
-#define BOARD_AIPI_LITE
+//#define BOARD_AIPI_LITE
 
 #ifndef ARDUINO_USB_CDC_ON_BOOT
 #define ARDUINO_USB_CDC_ON_BOOT 1
