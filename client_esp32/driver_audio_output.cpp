@@ -95,7 +95,8 @@ bool audio_output_codec_init(void) {
   ok &= es8311_write(0x00, 0x00);
 
   // 16 kHz, 16-bit I2S using MCLK = sample_rate * 256 = 4.096 MHz.
-  ok &= es8311_write(0x01, 0x3F);
+  ok &= es8311_write(0x01, 0x3F);        // Reset
+  
   ok &= es8311_update(0x02, 0x07, 0x08);
   ok &= es8311_write(0x03, 0x10);
   ok &= es8311_write(0x04, 0x20);
