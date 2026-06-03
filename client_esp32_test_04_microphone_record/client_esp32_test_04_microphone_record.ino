@@ -234,14 +234,17 @@ void setup() {
     display.displayLine1("I2S output init failed.");
     TEST_SERIAL.println("I2S output init mlk failed.");
   }
+  TEST_SERIAL.println("Setting volume to 19");    
+  audio_output_set_volume(10);
 #else                              
   audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
   if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
     display.displayLine1("I2S output init failed.");
-    TEST_SERIAL.println("I2S output init failed.");
+    TEST_SERIAL.println("I2S output init failed.");    
   }
+  TEST_SERIAL.println("Setting volume to 19");    
+  audio_output_set_volume(19);
 #endif    
-  audio_output_set_volume(10);
 }
 
 void loop() {

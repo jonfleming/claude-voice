@@ -592,6 +592,7 @@ void setup() {
   // Initialize the I2S bus for audio output
   i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT);
   // Set default volume to ~half (range 0-21)
+  Serial.println("[Setup] Setting volume to 10 (approx half)");
   audio_output_set_volume(10);
 
   // Create button handler task
