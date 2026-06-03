@@ -17,10 +17,10 @@
 #include <math.h>
 
 #include "../client_esp32/board_pins.h"
-#include "../client_esp32/driver_button.h"
 #include "../client_esp32/display.h"
-#include "../client_esp32/driver_audio_output.h"
 #include "../client_esp32/driver_audio_input.h"
+#include "../client_esp32/driver_audio_output.h"
+#include "../client_esp32/driver_button.h"
 
 #ifdef BOARD_AIPI_LITE
 #define TEST_SERIAL Serial
@@ -35,23 +35,23 @@ static const uint32_t RECORD_SECONDS = 3;
 static const uint32_t MAX_PCM_BYTES = SAMPLE_RATE * RECORD_SECONDS * sizeof(int16_t);
 
 static int last_button_state = Button::KEY_STATE_IDLE;
-static uint8_t *wav_buffer = NULL;
+static uint8_t* wav_buffer = NULL;
 static size_t wav_buffer_size = 0;
 static int selected_i2s_lane = -1;
 
-void write_u16_le(uint8_t *p, uint16_t value) {
+void write_u16_le(uint8_t* p, uint16_t value) {
   p[0] = value & 0xff;
   p[1] = (value >> 8) & 0xff;
 }
 
-void write_u32_le(uint8_t *p, uint32_t value) {
+void write_u32_le(uint8_t* p, uint32_t value) {
   p[0] = value & 0xff;
   p[1] = (value >> 8) & 0xff;
   p[2] = (value >> 16) & 0xff;
   p[3] = (value >> 24) & 0xff;
 }
 
-void write_wav_header(uint8_t *wav, uint32_t data_size) {
+void write_wav_header(uint8_t* wav, uint32_t data_size) {
   memcpy(wav + 0, "RIFF", 4);
   write_u32_le(wav + 4, 36 + data_size);
   memcpy(wav + 8, "WAVE", 4);
@@ -67,7 +67,7 @@ void write_wav_header(uint8_t *wav, uint32_t data_size) {
   write_u32_le(wav + 40, data_size);
 }
 
-int16_t convert_i2s_frame_to_pcm16(const int32_t *frame, int lane) {
+int16_t convert_i2s_frame_to_pcm16(const int32_t* frame, int lane) {
   static float dc_offset = 0.0f;
   const float alpha = 0.995f;
 
@@ -91,7 +91,7 @@ void record_and_playback() {
   }
 
   wav_buffer_size = 44 + MAX_PCM_BYTES;
-  wav_buffer = (uint8_t *)malloc(wav_buffer_size);
+  wav_buffer = (uint8_t*)malloc(wav_buffer_size);
   if (!wav_buffer) {
     TEST_SERIAL.println("Failed to allocate recording WAV buffer.");
     display.displayLine1("Record failed.");
@@ -100,7 +100,7 @@ void record_and_playback() {
   }
 
   write_wav_header(wav_buffer, MAX_PCM_BYTES);
-  uint8_t *pcm_out = wav_buffer + 44;
+  uint8_t* pcm_out = wav_buffer + 44;
   size_t pcm_written = 0;
   uint8_t input_chunk[1024];
 
@@ -123,9 +123,9 @@ void record_and_playback() {
       continue;
     }
 
-    const size_t read_size = audio_input_read_iis_data((char *)input_chunk,
-      sizeof(input_chunk));
-    const int32_t *frames = (const int32_t *)input_chunk;
+    const size_t read_size =
+        audio_input_read_iis_data((char*)input_chunk, sizeof(input_chunk));
+    const int32_t* frames = (const int32_t*)input_chunk;
     const size_t frame_count = read_size / 8;
 
     if (selected_i2s_lane < 0 && frame_count > 0) {
@@ -138,14 +138,14 @@ void record_and_playback() {
       }
       selected_i2s_lane = (lane1_energy > lane0_energy) ? 1 : 0;
       TEST_SERIAL.printf("I2S lane select: lane0=%llu lane1=%llu chosen=%d\r\n",
-        (unsigned long long)lane0_energy,
-        (unsigned long long)lane1_energy,
-        selected_i2s_lane);
+                         (unsigned long long)lane0_energy,
+                         (unsigned long long)lane1_energy, selected_i2s_lane);
     }
 
     for (size_t i = 0; i < frame_count && pcm_written < MAX_PCM_BYTES; i++) {
-      const int16_t sample = convert_i2s_frame_to_pcm16(frames + (i * 2), selected_i2s_lane < 0 ? 0 : selected_i2s_lane);
-      ((int16_t *)pcm_out)[pcm_written / 2] = sample;
+      const int16_t sample = convert_i2s_frame_to_pcm16(
+          frames + (i * 2), selected_i2s_lane < 0 ? 0 : selected_i2s_lane);
+      ((int16_t*)pcm_out)[pcm_written / 2] = sample;
       pcm_written += sizeof(int16_t);
 
       const uint32_t magnitude = abs((int)sample);
@@ -158,7 +158,7 @@ void record_and_playback() {
       const double rms = sqrt(sum_squares / samples_seen);
       char line2[96];
       snprintf(line2, sizeof(line2), "Peak: %lu  RMS: %.0f",
-        (unsigned long)peak, rms);
+               (unsigned long)peak, rms);
       display.displayLine2(line2);
     }
     display.routine();
@@ -169,13 +169,13 @@ void record_and_playback() {
 
   const double rms = samples_seen > 0 ? sqrt(sum_squares / samples_seen) : 0.0;
   TEST_SERIAL.printf("Recording complete: bytes=%u, peak=%lu, rms=%.0f\r\n",
-    (unsigned)wav_buffer_size, (unsigned long)peak, rms);
+                     (unsigned)wav_buffer_size, (unsigned long)peak, rms);
 
   char line1[96];
   char line2[96];
   snprintf(line1, sizeof(line1), "Recorded %u bytes.", (unsigned)pcm_written);
-  snprintf(line2, sizeof(line2), "Peak: %lu  RMS: %.0f",
-    (unsigned long)peak, rms);
+  snprintf(line2, sizeof(line2), "Peak: %lu  RMS: %.0f", (unsigned long)peak,
+           rms);
   display.displayLine1(line1);
   display.displayLine2(line2);
   delay(700);
@@ -231,13 +231,16 @@ void setup() {
   }
   audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
   if (!i2s_output_init_mclk(AUDIO_OUTPUT_MCLK, AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
-#else
+    display.displayLine1("I2S output init failed.");
+    TEST_SERIAL.println("I2S output init mlk failed.");
+  }
+#else                              
   audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
   if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
-#endif
     display.displayLine1("I2S output init failed.");
     TEST_SERIAL.println("I2S output init failed.");
   }
+#endif    
   audio_output_set_volume(10);
 }
 
