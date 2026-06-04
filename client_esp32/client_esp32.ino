@@ -12,12 +12,12 @@
 *   To build for **AIPI Lite**: define `BOARD_AIPI_LITE`
 *   (add -DBOARD_AIPI_LITE in build flags, or uncomment the define in board_pins.h).
 */
-#include "driver_audio_input.h"
-#include "driver_audio_output.h"
-#include "driver_button.h"
 #include "client_esp32.h"
 #include "board_pins.h"
 #include <esp_heap_caps.h>
+#include "driver_audio_input.h"
+#include "driver_audio_output.h"
+#include "driver_button.h"
 #include <ArduinoWebsockets.h>
 #include <mbedtls/base64.h>
 // WiFi + HTTP

@@ -11,7 +11,10 @@
  *   button, or type "p" in the serial monitor, to send another ping.
  */
 
+#include "sketch_config.h"
+
 #include <Arduino.h>
+#include <math.h>
 #include <WiFi.h>
 #include <ArduinoWebsockets.h>
 
@@ -20,6 +23,12 @@
 #include "../client_esp32/driver_audio_input.h"
 #include "../client_esp32/driver_audio_output.h"
 #include "../client_esp32/driver_button.h"
+
+#ifdef BOARD_AIPI_LITE
+#define TEST_SERIAL Serial
+#else
+#define TEST_SERIAL Serial0
+#endif
 
 using namespace websockets;
 
@@ -43,7 +52,7 @@ void set_lines(const char *line1, const char *line2) {
 
 void send_ping() {
   if (!ws_connected) {
-    Serial.println("WebSocket is not connected; ping skipped.");
+    TEST_SERIAL.println("WebSocket is not connected; ping skipped.");
     set_lines("WebSocket not connected.", "Waiting to reconnect...");
     return;
   }
@@ -51,7 +60,7 @@ void send_ping() {
   ping_count++;
   const char *payload = "{\"type\":\"ping\"}";
   const bool ok = ws_client.send(payload);
-  Serial.printf("Ping %lu send %s: %s\r\n",
+  TEST_SERIAL.printf("Ping %lu send %s: %s\r\n",
     (unsigned long)ping_count, ok ? "ok" : "failed", payload);
 
   char line1[96];
@@ -64,25 +73,25 @@ void send_ping() {
 }
 
 void connect_wifi() {
-  Serial.printf("Connecting to WiFi SSID: %s\r\n", WIFI_SSID);
+  TEST_SERIAL.printf("Connecting to WiFi SSID: %s\r\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
   set_lines("Connecting WiFi...", WIFI_SSID);
   const uint32_t start_ms = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start_ms < 20000) {
-    Serial.print(".");
+    TEST_SERIAL.print(".");
     display.routine();
     delay(500);
   }
-  Serial.println();
+  TEST_SERIAL.println();
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("WiFi IP: ");
-    Serial.println(WiFi.localIP());
+    TEST_SERIAL.print("WiFi IP: ");
+    TEST_SERIAL.println(WiFi.localIP());
     set_lines("WiFi connected.", WiFi.localIP().toString().c_str());
   } else {
-    Serial.println("WiFi connection timed out.");
+    TEST_SERIAL.println("WiFi connection timed out.");
     set_lines("WiFi connect failed.", "Check SSID/password.");
   }
 }
@@ -96,39 +105,48 @@ bool connect_websocket() {
   snprintf(line2, sizeof(line2), "%s:%d%s", SERVER_IP,
     CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
   set_lines("Connecting WebSocket...", line2);
-  Serial.printf("Connecting WebSocket to ws://%s:%d%s\r\n", SERVER_IP,
+  TEST_SERIAL.printf("Connecting WebSocket to ws://%s:%d%s\r\n", SERVER_IP,
     CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
 
   ws_connected = ws_client.connect(SERVER_IP, CLAUDE_VOICE_WS_PORT,
     CLAUDE_VOICE_WS_PATH);
 
   if (ws_connected) {
-    Serial.println("WebSocket connected.");
+    TEST_SERIAL.println("WebSocket connected.");
     set_lines("WebSocket connected.", "Sending first ping...");
     send_ping();
   } else {
-    Serial.println("WebSocket connection failed.");
+    TEST_SERIAL.println("WebSocket connection failed.");
     set_lines("WebSocket failed.", "Retrying every 3 sec.");
   }
   return ws_connected;
 }
 
 void setup() {
-  Serial.begin(115200);
-  while (!Serial) {
+#ifdef BOARD_AIPI_LITE
+  pinMode(AIPI_POWER_KEEPALIVE_PIN, OUTPUT);
+  digitalWrite(AIPI_POWER_KEEPALIVE_PIN, HIGH);
+  pinMode(SPEAKER_AMP_ENABLE, OUTPUT);
+  digitalWrite(SPEAKER_AMP_ENABLE, LOW);
+#endif
+
+  TEST_SERIAL.begin(115200);
+  uint32_t serial_wait_start = millis();
+  while (!TEST_SERIAL && (millis() - serial_wait_start < 3000)) {
     delay(10);
   }
 
-  Serial.println();
-  Serial.println("Test 05: WebSocket ping test");
+  TEST_SERIAL.println();
+  TEST_SERIAL.println("Test 05: WebSocket ping test");
+  TEST_SERIAL.println("[stage] setup: before display.init");
   display.init(TFT_DIRECTION);
   display.showBootInstructions("Test 05: websocket ping");
   set_lines("Starting network test.", "");
 
   ws_client.onMessage([](WebsocketsMessage message) {
     const String data = message.data();
-    Serial.print("WebSocket message: ");
-    Serial.println(data);
+    TEST_SERIAL.print("WebSocket message: ");
+    TEST_SERIAL.println(data);
 
     char line1[96];
     snprintf(line1, sizeof(line1), "Received %u bytes", (unsigned)data.length());
@@ -138,16 +156,16 @@ void setup() {
   ws_client.onEvent([](WebsocketsEvent event, String data) {
     if (event == WebsocketsEvent::ConnectionOpened) {
       ws_connected = true;
-      Serial.println("WebSocket event: opened");
+      TEST_SERIAL.println("WebSocket event: opened");
     } else if (event == WebsocketsEvent::ConnectionClosed) {
       ws_connected = false;
-      Serial.print("WebSocket event: closed ");
-      Serial.println(data);
+      TEST_SERIAL.print("WebSocket event: closed ");
+      TEST_SERIAL.println(data);
       set_lines("WebSocket closed.", "Will retry.");
     } else if (event == WebsocketsEvent::GotPing) {
-      Serial.println("WebSocket event: ping");
+      TEST_SERIAL.println("WebSocket event: ping");
     } else if (event == WebsocketsEvent::GotPong) {
-      Serial.println("WebSocket event: pong");
+      TEST_SERIAL.println("WebSocket event: pong");
       set_lines("Received WS pong event.", "Ping path works.");
     }
   });
