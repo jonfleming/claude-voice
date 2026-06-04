@@ -49,3 +49,4 @@ A standalone hardware client for the Voice AI Pipeline, designed for ESP32 devel
 - **Multitasking**: Uses FreeRTOS tasks to separate audio recording (`loop_task_sound_recorder`), audio playback (`i2s_output_wav`), and UI rendering.
 - **Optimized JSON**: Employs a zero-copy-adjacent manual JSON parser to minimize heap fragmentation on embedded hardware.
 - **Thread Safety**: Mutexes protect access to shared resources like the WebSocket client and display buffers.
+
