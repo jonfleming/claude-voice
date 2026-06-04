@@ -43,9 +43,9 @@ RemoteDebug Debug;
 #define APP_SERIAL Serial0
 #endif
 
-#define DBG_PRINTLN(msg) do { Debug.printf("[%8lu] ", millis()); Debug.println(msg); } while(0)
-#define DBG_PRINT(msg) Debug.print(msg)
-#define DBG_PRINTF(...) Debug.printf(__VA_ARGS__)
+#define DBG_PRINTLN(msg) do { APP_SERIAL.printf("[%8lu] ", millis()); APP_SERIAL.println(msg); Debug.printf("[%8lu] ", millis()); Debug.println(msg); } while(0)
+#define DBG_PRINT(msg) do { APP_SERIAL.print(msg); Debug.print(msg); } while(0)
+#define DBG_PRINTF(...) do { APP_SERIAL.printf(__VA_ARGS__); Debug.printf(__VA_ARGS__); } while(0)
 
 // Mutex to protect display request buffers
 SemaphoreHandle_t display_mutex = NULL;

@@ -118,6 +118,24 @@ A standalone hardware client located in `client_esp32/`.
   - Update `WIFI_SSID`, `WIFI_PASS`, and `SERVER_IP` in the sketch.
   - Flash to your ESP32 board.
 
+#### Wireless Debugging (RemoteDebug / telnet)
+
+The ESP32 client uses [RemoteDebug](https://github.com/JoaoLopesF/RemoteDebug) to expose all `[Recorder]`, `[Button]`, `[Loop]`, and `[WS]` log output over a telnet connection. This lets you debug the device without a USB cable — useful when running standalone on battery.
+
+After the device connects to WiFi, open a telnet session from any machine on the same network:
+
+```bash
+# Using the mDNS hostname (recommended — no need to look up the IP)
+telnet claude-voice-esp32
+
+# Or by IP address (printed in serial output during setup)
+telnet 192.168.x.x
+```
+
+> **Windows**: telnet is disabled by default. Enable it via *Control Panel → Programs → Turn Windows features on or off → Telnet Client*, or use `putty.exe` in raw/telnet mode, or install [PuTTY](https://www.putty.org/).
+
+The log output also mirrors to the Arduino serial monitor when the USB cable is connected, so both paths work simultaneously.
+
 #### AIPI-Lite: shared I2S peripheral
 
 On the AIPI-Lite the microphone and speaker share the same I2S peripheral — `AUDIO_INPUT_MCLK/BCLK/WS` and `AUDIO_OUTPUT_MCLK/BCLK/LRC` are all the same GPIO pins (6, 14, 12). The Freenove Media Kit has a second dedicated I2S port, so this limitation does not apply there.
