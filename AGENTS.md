@@ -96,3 +96,24 @@ Connect to `ws://localhost:8080/ws`
 - **requirements.txt**: Python dependencies
 - **.env**: Configuration
 - **README.md**: Setup documentation
+
+## Compile and Upload
+
+I'm using the Arduino IDE to build and flash the firmware. For agents, here are the equivalent arduino-cli commands:
+
+### Compile
+
+arduino-cli compile. Works for both the Freenove and the AIPI
+
+```bash
+arduino-cli compile --verbose --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=none,DFUOnBoot=default,EraseFlash=all,EventsCore=1,FlashMode=qio,FlashSize=16M,JTAGAdapter=default,LoopCore=1,MSCOnBoot=default,PartitionScheme=fatflash,PSRAM=opi,UploadMode=cdc,UploadSpeed=921600,USBMode=hwcdc,ZigbeeMode=default"
+```
+
+### Upload
+
+- set PORT=COM4 for Freenove Media Kit
+- Set PORT=COM3 for AIPI-Lite
+
+```bash
+arduino-cli upload -p %PORT% --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=none,DFUOnBoot=default,EraseFlash=all,EventsCore=1,FlashMode=qio,FlashSize=16M,JTAGAdapter=default,LoopCore=1,MSCOnBoot=default,PartitionScheme=fatflash,PSRAM=opi,UploadMode=cdc,UploadSpeed=921600,USBMode=hwcdc,ZigbeeMode=default"
+```
