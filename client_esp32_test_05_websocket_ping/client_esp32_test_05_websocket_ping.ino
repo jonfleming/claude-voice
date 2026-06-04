@@ -15,8 +15,11 @@
 #include <WiFi.h>
 #include <ArduinoWebsockets.h>
 
-#include "../client_esp32/driver_button.cpp"
-#include "../client_esp32/display.cpp"
+#include "../client_esp32/board_pins.h"
+#include "../client_esp32/display.h"
+#include "../client_esp32/driver_audio_input.h"
+#include "../client_esp32/driver_audio_output.h"
+#include "../client_esp32/driver_button.h"
 
 using namespace websockets;
 
