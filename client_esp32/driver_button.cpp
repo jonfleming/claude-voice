@@ -1,6 +1,12 @@
 #include "driver_button.h"
 #include "board_pins.h"
 
+#ifdef BOARD_AIPI_LITE
+Button button(BUTTON_PIN_RIGHT);
+#else
+Button button(BUTTON_PIN);
+#endif
+
 Button::Button(int pin): pin(pin) {
   // Initialize variables
   thresholdRange = 0;

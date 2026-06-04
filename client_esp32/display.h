@@ -2,7 +2,6 @@
 #define __DISPLAY_H
 
 #include "board_pins.h"
-#pragma message("lv_conf.h path: " __FILE__)
 #include "lvgl.h"
 #include "TFT_eSPI.h"
 #include "driver_button.h"

@@ -12,6 +12,8 @@
 *   To build for **AIPI Lite**: define `BOARD_AIPI_LITE`
 *   (add -DBOARD_AIPI_LITE in build flags, or uncomment the define in board_pins.h).
 */
+#include "sketch_config.h"
+
 #include "client_esp32.h"
 #include "board_pins.h"
 #include <esp_heap_caps.h>
@@ -34,6 +36,12 @@
 using namespace websockets;
 
 RemoteDebug Debug;
+
+#ifdef BOARD_AIPI_LITE
+#define APP_SERIAL Serial
+#else
+#define APP_SERIAL Serial0
+#endif
 
 #define DBG_PRINTLN(msg) do { Debug.printf("[%8lu] ", millis()); Debug.println(msg); } while(0)
 #define DBG_PRINT(msg) Debug.print(msg)
@@ -335,7 +343,7 @@ void handle_claude_ws_json(const String &json) {
     String token = extract_json_string_value(json, "content");
     // Do NOT trim token here; Ollama often sends tokens with leading/trailing spaces
     if (token.length() > 0) {
-      Serial.print(token);
+      APP_SERIAL.print(token);
       request_display_line2(token.c_str());
     }
   } else if (type == "audio") {
@@ -563,25 +571,39 @@ void setup() {
   // Speaker Amplifier Control (start disabled)
   pinMode(SPEAKER_AMP_ENABLE, OUTPUT);
   digitalWrite(SPEAKER_AMP_ENABLE, LOW);  // Amp disabled by default
+#endif
 
+  // Initialize the board-selected serial port at 115200 baud.
+  APP_SERIAL.begin(115200);
+  // Match test behavior: wait briefly for monitor, but continue for battery/standalone mode.
+  uint32_t serial_wait_start = millis();
+  while (!APP_SERIAL && (millis() - serial_wait_start < 3000)) {
+    delay(10);
+  }
+
+  APP_SERIAL.println();
+  APP_SERIAL.println("[Setup] Stage 1: serial ready");
+
+#ifdef BOARD_AIPI_LITE
   // Battery Voltage Monitoring (optional)
   pinMode(BATTERY_ADC_PIN, INPUT);
   analogSetAttenuation(ADC_11db);  // ~0-3.3V input range
+  APP_SERIAL.println("[Setup] Stage 2: battery ADC configured");
 #endif
   // ===============================================================
 
-  // Initialize the serial communication at 115200 baud rate
-  Serial.begin(115200);
-  // Wait for the serial port to be ready
-  while (!Serial) {
-    delay(10);
-  }
+  APP_SERIAL.println("[Setup] Initializing...");
+  
   // Display
   display.init(TFT_DIRECTION);
   // Show boot instruction at top of screen
   display.showBootInstructions("Press button to start a conversation.");
-  Serial.println("");
+  APP_SERIAL.println("");
   request_display_line2("");
+
+  // Button
+  button.init();
+  APP_SERIAL.println("[Setup] Button initialized");
 
   // Initialize the I2S bus for audio input
 #ifdef BOARD_AIPI_LITE
@@ -590,9 +612,26 @@ void setup() {
   audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
 #endif
   // Initialize the I2S bus for audio output
-  i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT);
+#ifdef BOARD_AIPI_LITE
+  if (!audio_output_codec_init()) {
+    APP_SERIAL.println("[Setup] ES8311 codec init failed");
+  } else {
+    APP_SERIAL.println("[Setup] ES8311 codec initialized");
+  }
+  if (!i2s_output_init_mclk(AUDIO_OUTPUT_MCLK, AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
+    APP_SERIAL.println("[Setup] I2S output (MCLK) init failed");
+  } else {
+    APP_SERIAL.println("[Setup] I2S output (MCLK) initialized");
+  }
+#else
+  if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
+    APP_SERIAL.println("[Setup] I2S output init failed");
+  } else {
+    APP_SERIAL.println("[Setup] I2S output initialized");
+  }
+#endif
   // Set default volume to ~half (range 0-21)
-  Serial.println("[Setup] Setting volume to 10 (approx half)");
+  APP_SERIAL.println("[Setup] Setting volume to 10 (approx half)");
   audio_output_set_volume(10);
 
   // Create button handler task
@@ -601,11 +640,11 @@ void setup() {
   // Create mutex for display buffer protection
   display_mutex = xSemaphoreCreateMutex();
   if (!display_mutex) {
-    Serial.println("[Setup] Warning: failed to create display mutex");
+    APP_SERIAL.println("[Setup] Warning: failed to create display mutex");
   }
   ws_mutex = xSemaphoreCreateMutex();
   if (!ws_mutex) {
-    Serial.println("[Setup] Warning: failed to create websocket mutex");
+    APP_SERIAL.println("[Setup] Warning: failed to create websocket mutex");
   }
 
   // Connect to WiFi (used for HTTP requests)
@@ -892,8 +931,8 @@ void loop() {
     claude_ws_connect();
   }
   // Simple serial UI
-  if (Serial.available()) {
-    String input = Serial.readStringUntil('\n');
+  if (APP_SERIAL.available()) {
+    String input = APP_SERIAL.readStringUntil('\n');
     input.trim();
     if (input == "w") {
       DBG_PRINTLN("[Loop] Reconnecting websocket...");
@@ -901,8 +940,8 @@ void loop() {
       claude_ws_connect();
     } else if (input == "i") {
       // Print IP info
-      Serial.print("[Loop] IP: ");
-      Serial.println(WiFi.localIP());
+      APP_SERIAL.print("[Loop] IP: ");
+      APP_SERIAL.println(WiFi.localIP());
     }
   }
   // Delay for 10 milliseconds
@@ -911,22 +950,22 @@ void loop() {
 
 // Connect to WiFi with simple retry logic
 void wifi_connect() {
-  Serial.printf("[WiFi] Connecting to WiFi SSID: %s\r\n", WIFI_SSID);
+  APP_SERIAL.printf("[WiFi] Connecting to WiFi SSID: %s\r\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
+    APP_SERIAL.print(".");
     if (millis() - start > 20000) {
-      Serial.println("\n[WiFi] WiFi connect timeout");
+      APP_SERIAL.println("\n[WiFi] WiFi connect timeout");
       return;
     }
   }
-  Serial.println("\n[WiFi] WiFi connected");
-  Serial.print("[WiFi] IP address: ");
-  Serial.println(WiFi.localIP());
+  APP_SERIAL.println("\n[WiFi] WiFi connected");
+  APP_SERIAL.print("[WiFi] IP address: ");
+  APP_SERIAL.println(WiFi.localIP());
   // Give the network stack a moment to stabilize
   delay(1000);
 }
