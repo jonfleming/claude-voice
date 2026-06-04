@@ -33,6 +33,7 @@ volatile TaskHandle_t player_task_handle = NULL;
 static const uint32_t SAMPLE_RATE = 16000;
 static const uint32_t RECORD_SECONDS = 3;
 static const uint32_t MAX_PCM_BYTES = SAMPLE_RATE * RECORD_SECONDS * sizeof(int16_t);
+static const float MIC_CAPTURE_GAIN = 18.0f;
 
 static int last_button_state = Button::KEY_STATE_IDLE;
 static uint8_t* wav_buffer = NULL;
@@ -69,7 +70,6 @@ void write_wav_header(uint8_t* wav, uint32_t data_size) {
 
 int16_t convert_i2s_frame_to_pcm16(const int32_t* frame) {
   const float alpha = 0.999f;
-  const float gain = 6.0f;
 
   // Mix both stereo lanes so we don't depend on board/channel mapping.
   const int32_t raw = frame[0] + frame[1];
@@ -77,7 +77,7 @@ int16_t convert_i2s_frame_to_pcm16(const int32_t* frame) {
   float filtered = (float)raw - g_input_dc_offset;
 
   // Match the proven conversion used in the main client path.
-  float amplified = (filtered * gain) / 65536.0f;
+  float amplified = (filtered * MIC_CAPTURE_GAIN) / 65536.0f;
 
   if (amplified > 32767.0f) amplified = 32767.0f;
   if (amplified < -32768.0f) amplified = -32768.0f;
@@ -121,6 +121,13 @@ void record_and_playback() {
   uint32_t samples_seen = 0;
   uint32_t peak = 0;
   double sum_squares = 0.0;
+
+#ifdef BOARD_AIPI_LITE
+  // Shared I2S bus: always start each recording from a fresh RX init.
+  audio_input_deinit();
+  delay(10);
+  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
+#endif
 
   // Start each take with a fresh DC estimate and drop startup transients.
   g_input_dc_offset = 0.0f;
@@ -239,21 +246,22 @@ void setup() {
     display.displayLine1("ES8311 init failed.");
     TEST_SERIAL.println("ES8311 init failed.");
   }
-  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
   if (!i2s_output_init_mclk(AUDIO_OUTPUT_MCLK, AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
     display.displayLine1("I2S output init failed.");
     TEST_SERIAL.println("I2S output init mlk failed.");
   }
-  TEST_SERIAL.println("Setting volume to 19");    
+  TEST_SERIAL.println("Setting volume to 20");    
   audio_output_set_volume(20);
+  // Leave the shared I2S peripheral in RX mode before the first capture.
+  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
 #else                              
   audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
   if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
     display.displayLine1("I2S output init failed.");
     TEST_SERIAL.println("I2S output init failed.");    
   }
-  TEST_SERIAL.println("Setting volume to 19");    
-  audio_output_set_volume(19);
+  TEST_SERIAL.println("Setting volume to 20");    
+  audio_output_set_volume(20);
 #endif    
 }
 
