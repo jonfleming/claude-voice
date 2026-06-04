@@ -118,6 +118,19 @@ A standalone hardware client located in `client_esp32/`.
   - Update `WIFI_SSID`, `WIFI_PASS`, and `SERVER_IP` in the sketch.
   - Flash to your ESP32 board.
 
+#### AIPI-Lite: shared I2S peripheral
+
+On the AIPI-Lite the microphone and speaker share the same I2S peripheral — `AUDIO_INPUT_MCLK/BCLK/WS` and `AUDIO_OUTPUT_MCLK/BCLK/LRC` are all the same GPIO pins (6, 14, 12). The Freenove Media Kit has a second dedicated I2S port, so this limitation does not apply there.
+
+Because only one I2S instance can own the peripheral at a time, any sketch that records then plays back must:
+
+1. Call `audio_input_deinit()` after recording finishes — this releases the peripheral from RX mode.
+2. Wait at least 10 ms (`delay(10)`) to let the driver flush its RX FIFO.
+3. Call the speaker path (`i2s_output_wav()` / `i2s_output_stream_begin()`), which reinitialises the peripheral in TX mode.
+4. Call `audio_input_init_mclk(...)` after playback finishes to re-arm the mic for the next recording cycle.
+
+Skipping step 1 leaves the mic driver owning the port; the subsequent `i2s_output.begin()` call fails silently and the speaker outputs bus noise instead of audio.
+
 ### 3. Minimal Ping Tester
 A simple CLI tool to verify connectivity:
 ```bash

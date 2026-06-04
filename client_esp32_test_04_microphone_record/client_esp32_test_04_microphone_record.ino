@@ -37,7 +37,6 @@ static const uint32_t MAX_PCM_BYTES = SAMPLE_RATE * RECORD_SECONDS * sizeof(int1
 static int last_button_state = Button::KEY_STATE_IDLE;
 static uint8_t* wav_buffer = NULL;
 static size_t wav_buffer_size = 0;
-static int selected_i2s_lane = -1;
 
 void write_u16_le(uint8_t* p, uint16_t value) {
   p[0] = value & 0xff;
@@ -67,16 +66,18 @@ void write_wav_header(uint8_t* wav, uint32_t data_size) {
   write_u32_le(wav + 40, data_size);
 }
 
-int16_t convert_i2s_frame_to_pcm16(const int32_t* frame, int lane) {
+int16_t convert_i2s_frame_to_pcm16(const int32_t* frame) {
   static float dc_offset = 0.0f;
-  const float alpha = 0.995f;
+  const float alpha = 0.999f;
+  const float gain = 6.0f;
 
-  const int32_t raw = frame[lane];
+  // Mix both stereo lanes so we don't depend on board/channel mapping.
+  const int32_t raw = frame[0] + frame[1];
   dc_offset = (alpha * dc_offset) + ((1.0f - alpha) * (float)raw);
   float filtered = (float)raw - dc_offset;
 
-  // Conservative conversion from 32-bit lane to 16-bit PCM.
-  float amplified = filtered / 131072.0f;
+  // Match the proven conversion used in the main client path.
+  float amplified = (filtered * gain) / 65536.0f;
 
   if (amplified > 32767.0f) amplified = 32767.0f;
   if (amplified < -32768.0f) amplified = -32768.0f;
@@ -107,7 +108,6 @@ void record_and_playback() {
   uint32_t samples_seen = 0;
   uint32_t peak = 0;
   double sum_squares = 0.0;
-  selected_i2s_lane = -1;
 
   TEST_SERIAL.println("Recording...");
   display.displayLine1("Recording for 3 seconds...");
@@ -128,23 +128,8 @@ void record_and_playback() {
     const int32_t* frames = (const int32_t*)input_chunk;
     const size_t frame_count = read_size / 8;
 
-    if (selected_i2s_lane < 0 && frame_count > 0) {
-      uint64_t lane0_energy = 0;
-      uint64_t lane1_energy = 0;
-      const size_t lane_probe_count = frame_count < 64 ? frame_count : 64;
-      for (size_t i = 0; i < lane_probe_count; i++) {
-        lane0_energy += (uint64_t)llabs((long long)frames[i * 2]);
-        lane1_energy += (uint64_t)llabs((long long)frames[i * 2 + 1]);
-      }
-      selected_i2s_lane = (lane1_energy > lane0_energy) ? 1 : 0;
-      TEST_SERIAL.printf("I2S lane select: lane0=%llu lane1=%llu chosen=%d\r\n",
-                         (unsigned long long)lane0_energy,
-                         (unsigned long long)lane1_energy, selected_i2s_lane);
-    }
-
     for (size_t i = 0; i < frame_count && pcm_written < MAX_PCM_BYTES; i++) {
-      const int16_t sample = convert_i2s_frame_to_pcm16(
-          frames + (i * 2), selected_i2s_lane < 0 ? 0 : selected_i2s_lane);
+      const int16_t sample = convert_i2s_frame_to_pcm16(frames + (i * 2));
       ((int16_t*)pcm_out)[pcm_written / 2] = sample;
       pcm_written += sizeof(int16_t);
 
@@ -184,6 +169,12 @@ void record_and_playback() {
   display.displayLine1("Playing recording back...");
   display.displayLine2("Listen for your voice.");
 #ifdef BOARD_AIPI_LITE
+  // AIPI-Lite: mic and speaker share the same I2S peripheral (MCLK/BCLK/WS
+  // pins are identical). Stop and uninstall the mic driver before switching
+  // the bus to TX-only mode for playback; otherwise i2s_output_wav() tries to
+  // reconfigure a port that the mic driver still owns and the result is noise.
+  audio_input_deinit();
+  delay(10); // let the driver flush the RX buffer
   digitalWrite(SPEAKER_AMP_ENABLE, HIGH);
   delay(10);
 #endif
@@ -193,6 +184,8 @@ void record_and_playback() {
 #ifdef BOARD_AIPI_LITE
   delay(20);
   digitalWrite(SPEAKER_AMP_ENABLE, LOW);
+  // Re-initialize the mic driver so the next record-and-playback cycle works.
+  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
 #endif
 
   display.displayLine1("Microphone test complete.");
