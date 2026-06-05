@@ -1,0 +1,16 @@
+substitutions:
+  device_name: aipi-green
+  device_friendly_name: AiPi Green
+  status_light_restore_mode: RESTORE_DEFAULT_OFF
+
+packages:
+  common: !include packages/esp32_aipi.yaml
+
+api:
+  encryption:
+    key: "tXZiMc7pvzmsdLQyBpRHfKadGULzJ9mo3FvtfiJOFBk="
+
+ota:
+  - platform: esphome
+    password: "6ed0cf5731f874e6e399f1a005d45c49"
+ 

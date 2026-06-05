@@ -1,0 +1,146 @@
+substitutions:
+  device_name: aipi
+  device_friendly_name: AiPi
+  lcd_backlight_pin: GPIO3
+  power_latch_pin: GPIO10
+  left_button_pin: GPIO1
+  right_button_pin: GPIO42
+  has_boot_audio_dac_init: true
+
+
+packages:
+  common: !include common.yaml
+
+esp32:
+  variant: esp32s3
+  framework:
+    type: esp-idf
+  flash_size: 16MB
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${device_friendly_name}
+  on_boot:
+    - priority: 900        # Latch power before any components init
+      then:
+        - lambda: |-
+            // Drive the ACTUAL keep-alive pin HIGH immediately
+            gpio_set_direction(GPIO_NUM_10, GPIO_MODE_OUTPUT);
+            gpio_set_level(GPIO_NUM_10, 1);
+        - if:
+            condition:
+              lambda: return "${has_power_latch}" == "true" || "${has_power_latch}" == "True";
+            then:
+              - switch.turn_on: power_latch
+    - priority: 600
+      then:
+        - if:
+            condition:
+              lambda: return "${has_boot_audio_dac_init}" == "true" || "${has_boot_audio_dac_init}" == "True";
+            then:
+              - delay: 50ms
+              - switch.turn_on: speaker_enable      
+              - delay: 100ms
+              - audio_dac.set_volume:
+                  id: es8311_dac
+                  volume: 75%
+              - audio_dac.mute_off: es8311_dac
+
+# Add switches for the LCD backlight and power latch
+switch:
+  - platform: gpio
+    id: lcd_backlight
+    name: "LCD Backlight"
+    pin:
+      number: ${lcd_backlight_pin}
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: gpio
+    id: speaker_enable
+    name: "Speaker Enabled"
+    pin:
+      number: GPIO9
+    restore_mode: ALWAYS_ON    
+  - platform: gpio
+    id: power_latch
+    pin: ${power_latch_pin}
+    name: "Power Latch"
+    restore_mode: ALWAYS_ON
+
+binary_sensor:
+  # Left button powers on and off
+  - platform: gpio
+    pin: ${left_button_pin}
+    name: "Left Button"
+    id: left_button
+    filters:
+      - invert:
+    on_multi_click:
+      - timing:
+          - ON for at most 500ms
+          - OFF for at least 50ms
+        then:
+          - if:
+              condition:
+                lambda: return "${has_power_latch}" == "true" || "${has_power_latch}" == "True";
+              then:
+                - logger.log: "Button short press: Powering On."
+      - timing:
+          - ON for at least 2s
+        then:
+          - if:
+              condition:
+                lambda: return "${has_power_latch}" == "true" || "${has_power_latch}" == "True";
+              then:
+                - switch.turn_off: power_latch
+  # Right button toggles voice assistant capture on short press.
+  - platform: gpio
+    pin: ${right_button_pin}
+    name: "Right Button"
+    id: right_button
+    filters:
+      - invert:
+    on_multi_click:
+      - timing:
+          - ON for at most 500ms
+          - OFF for at least 50ms
+        then:
+          - if:
+              condition:
+                voice_assistant.is_running:
+              then:
+                - logger.log: "Button short press: stopping voice assistant capture."
+                - voice_assistant.stop:
+              else:
+                - if:
+                    condition:
+                      lambda: return "${use_continuous_va}" == "true" || "${use_continuous_va}" == "True";
+                    then:
+                      - logger.log: "Button short press: starting continuous voice assistant capture."
+                      - voice_assistant.start_continuous:
+                    else:
+                      - logger.log: "Button short press: starting voice assistant capture."
+                      - voice_assistant.start:
+      - timing:
+          - ON for at least 2s
+        then:
+          - if:
+              condition:
+                lambda: return "${has_power_latch}" == "true" || "${has_power_latch}" == "True";
+              then:
+                - logger.log: "Button long press: cutting power."
+                - if:
+                    condition:
+                      voice_assistant.is_running:
+                    then:
+                      - voice_assistant.stop:
+                - delay: 150ms
+                - switch.turn_off: power_latch
+
+# ES8311 DAC
+# Using 16bit audio at 16 kHz for best compatability
+audio_dac:
+  - platform: es8311
+    id: es8311_dac
+    bits_per_sample: 16bit
+    sample_rate: 16000
+    i2c_id: i2c_es8311
