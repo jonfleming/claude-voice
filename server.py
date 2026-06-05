@@ -635,14 +635,14 @@ class AudioBuffer:
             if self.speech_start_time is not None and self.last_audio_time is not None:
                 speech_duration = self.last_audio_time - self.speech_start_time
                 if speech_duration >= self.min_speech:
-                    log(f"[VAD] Silent threshold reached, speech duration: {speech_duration:.2f}s -> trigger transcription")
+                    log(f"[VAD] Silent threshold reached. Silence duration: {self.silent_duration:.2f}s. Speech duration: {speech_duration:.2f}s -> trigger transcription")
                     return True
             
             # If we have reached the silence threshold but never detected speech,
             # or speech was too short, clear the buffer to avoid it growing indefinitely.
             if self.silent_duration > self.vad_threshold * 2:
                 if self.speech_start_time is not None:
-                    log("[VAD] Silence threshold reached but speech too short, clearing.")
+                    log(f"[VAD] Silence threshold reached but speech too short. Silence duration: {self.silent_duration:.2f}s. Speech duration: {self.last_audio_time - self.speech_start_time:.2f}s -> clearing.")
                 self.clear()
 
         return False

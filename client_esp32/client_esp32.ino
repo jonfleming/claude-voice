@@ -48,7 +48,7 @@ RemoteDebug Debug;
 #define DBG_PRINTF(...) do { APP_SERIAL.printf(__VA_ARGS__); Debug.printf(__VA_ARGS__); } while(0)
 
 #ifdef BOARD_AIPI_LITE
-static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.030f;
+static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.004f;
 #else
 static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.005f;
 #endif
