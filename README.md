@@ -53,8 +53,8 @@ Example: download the English Lessac medium voice
 ```bash
 mkdir -p ~/.local/share/piper/models
 cd ~/.local/share/piper/models
-curl -L -O https://github.com/rhasspy/piper/releases/download/2024.01.16/en_US-lessac-medium.onnx
-curl -L -O https://github.com/rhasspy/piper/releases/download/2024.01.16/en_US-lessac-medium.onnx.json
+curl -L -o en_US-amy-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx
+curl -L -o en_US-amy-medium.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
 ```
 
 Find additional voices and releases on the Piper GitHub releases page:
