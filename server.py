@@ -118,6 +118,59 @@ def get_hindsight_client() -> Optional[Hindsight]:
     return hindsight_client
 
 
+def _coerce_recall_score(score) -> Optional[float]:
+    """Convert a raw recall score into a float if possible."""
+    if score is None:
+        return None
+
+    try:
+        return float(score)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_score_from_mapping(mapping: dict) -> Optional[float]:
+    """Extract a recall score from a dict-like result payload."""
+    for key in ("score", "similarity", "relevance"):
+        score = _coerce_recall_score(mapping.get(key))
+        if score is not None:
+            return score
+
+    metadata = mapping.get("metadata")
+    if isinstance(metadata, dict):
+        return _extract_score_from_mapping(metadata)
+
+    return None
+
+
+def _extract_score_from_object(item) -> Optional[float]:
+    """Extract a recall score from an object-like result payload."""
+    for attr_name in ("score", "similarity", "relevance"):
+        score = _coerce_recall_score(getattr(item, attr_name, None))
+        if score is not None:
+            return score
+
+    metadata = getattr(item, "metadata", None)
+    if isinstance(metadata, dict):
+        return _extract_score_from_mapping(metadata)
+
+    model_dump = getattr(item, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if isinstance(dumped, dict):
+            return _extract_score_from_mapping(dumped)
+
+    return None
+
+
+def _extract_recall_score(item) -> Optional[float]:
+    """Best-effort extraction of a recall score from a result item."""
+    if isinstance(item, dict):
+        return _extract_score_from_mapping(item)
+
+    return _extract_score_from_object(item)
+
+
 def retain_memory(content: str, context: str = "", tags: list = None) -> bool:
     """Store a memory in Hindsight."""
     if tags is None:
@@ -156,7 +209,13 @@ def recall_memories(query: str, budget: str = "low") -> list:
             items = []
 
         memories = []
+        dropped = 0
         for item in items:
+            score = _extract_recall_score(item)
+            if score is not None and score <= 0:
+                dropped += 1
+                continue
+
             text = getattr(item, "text", None)
             if text:
                 memories.append(text)
@@ -164,8 +223,11 @@ def recall_memories(query: str, budget: str = "low") -> list:
                 memories.append(item["text"])
             elif isinstance(item, str):
                 memories.append(item)
+
+        if dropped:
+            log(f"[Hindsight] Dropped {dropped} zero-score recall items")
+
         return memories
-        return []
     except Exception as e:
         log(f"[Hindsight] Recall failed: {e}")
         return []
