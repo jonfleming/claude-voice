@@ -151,7 +151,17 @@ volatile bool response_audio_seen = false;
 volatile bool response_audio_done_received = false;
 volatile bool conversation_active = false;
 
+#ifdef BOARD_AIPI_LITE
+static const uint32_t POWER_BUTTON_LONG_PRESS_MS = 2000;
+volatile bool power_off_in_progress = false;
+bool left_button_last_pressed = false;
+bool left_button_longpress_fired = false;
+unsigned long left_button_press_start_ms = 0;
+#endif
+
 bool claude_ws_send_vad_config(float energy_threshold);
+void abort_conversation_and_return_idle(bool show_boot_instructions = true);
+void handle_left_power_button_events();
 
 void request_showBootInstructions(const char *text) {
   if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
@@ -613,6 +623,9 @@ void setup() {
   digitalWrite(POWER_KEEP_ALIVE_PIN, HIGH);  // Keep device powered on battery
   delay(10);  // Brief delay to stabilize power
 
+  // Left button controls power latch behavior on AIPI-Lite.
+  pinMode(BUTTON_PIN_LEFT, INPUT_PULLUP);
+
   // Speaker Amplifier Control (start disabled)
   pinMode(SPEAKER_AMP_ENABLE, OUTPUT);
   digitalWrite(SPEAKER_AMP_ENABLE, LOW);  // Amp disabled by default
@@ -819,33 +832,77 @@ void stop_recorder_task(void) {
   }
 }
 
+void abort_conversation_and_return_idle(bool show_boot_instructions) {
+  conversation_active = false;
+  button_abort = true;
+
+  if (recorder_task_handle != NULL) {
+    DBG_PRINTLN("[Button] Stopping listening...");
+    stop_recorder_task();
+  }
+
+  bool was_player_running = (player_task_handle != NULL);
+  if (was_player_running) {
+    DBG_PRINTLN("[Button] Stopping playback...");
+    stop_player_task();
+    i2s_output_stream_end();
+  }
+
+  resume_recorder_after_response = false;
+  response_done_received = false;
+  response_audio_seen = false;
+  response_audio_done_received = false;
+  last_audio_payload_ms = 0;
+
+  if (!was_player_running) {
+    stop_player_task();
+  }
+
+  request_clear_lines();
+  if (show_boot_instructions) {
+    request_showBootInstructions("Press button to start a conversation.");
+  }
+}
+
+void handle_left_power_button_events() {
+#ifdef BOARD_AIPI_LITE
+  if (power_off_in_progress) return;
+
+  const bool pressed = (digitalRead(BUTTON_PIN_LEFT) == LOW);
+  if (pressed && !left_button_last_pressed) {
+    left_button_press_start_ms = millis();
+    left_button_longpress_fired = false;
+  }
+
+  if (pressed && !left_button_longpress_fired &&
+      (millis() - left_button_press_start_ms >= POWER_BUTTON_LONG_PRESS_MS)) {
+    left_button_longpress_fired = true;
+    power_off_in_progress = true;
+
+    DBG_PRINTLN("[Power] Left button long press: cutting power latch");
+    request_display_line1("Powering off...");
+    request_display_line2("");
+
+    abort_conversation_and_return_idle(false);
+    if (claude_ws_connected) {
+      claude_ws_send_stop();
+    }
+
+    delay(150);
+    digitalWrite(SPEAKER_AMP_ENABLE, LOW);
+    digitalWrite(POWER_KEEP_ALIVE_PIN, LOW);
+  }
+
+  left_button_last_pressed = pressed;
+#endif
+}
+
 void handle_button_events() {
   int button_state = button.get_button_state();
   if (button_state == Button::KEY_STATE_PRESSED && last_button_state_for_toggle != Button::KEY_STATE_PRESSED) {
     // If either recorder or player is running, stop them
     if (recorder_task_handle != NULL || player_task_handle != NULL) {
-      conversation_active = false;
-      button_abort = true;
-      if (recorder_task_handle != NULL) {
-        DBG_PRINTLN("[Button] Stopping listening...");
-        stop_recorder_task();
-      }
-      bool was_player_running = (player_task_handle != NULL);
-      if (was_player_running) {
-        DBG_PRINTLN("[Button] Stopping playback...");
-        stop_player_task();
-        i2s_output_stream_end();
-      }
-      resume_recorder_after_response = false;
-      response_done_received = false;
-      response_audio_seen = false;
-      response_audio_done_received = false;
-      last_audio_payload_ms = 0;
-      if (!was_player_running) {
-        stop_player_task();
-      }
-      request_clear_lines();
-      request_showBootInstructions("Press button to start a conversation.");
+      abort_conversation_and_return_idle(true);
     } else {
       // Start a new conversation
       button_abort = false;
@@ -865,6 +922,7 @@ void handle_button_events() {
 
 void loop_task_button_handler(void *pvParameters) {
   while (1) {
+    handle_left_power_button_events();
     button.key_scan();
     handle_button_events();
     vTaskDelay(20 / portTICK_PERIOD_MS);
