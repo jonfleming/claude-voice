@@ -193,7 +193,7 @@ def recall_memories(query: str, budget: str = "low") -> list:
     if client is None:
         return []
     try:
-        result = client.recall(bank_id=HINDSIGHT_BANK, query=query, budget=budget)
+        result = client.recall(bank_id=HINDSIGHT_BANK, query=query, budget=budget, min_score=0.01)
         log(f"[Hindsight] Recall {query}:\n {result}")
 
         if result is None:
