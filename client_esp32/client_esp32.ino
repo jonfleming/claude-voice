@@ -96,7 +96,6 @@ SemaphoreHandle_t ws_mutex = NULL;
 
 // Define the size of PSRAM in bytes
 #define MOLLOC_SIZE (4 * 1024 * 1024)
-
 // ---------- WiFi / Server configuration (edit before upload) ----------
 //#define WIFI_SSID "FLEMING_2"
 //#define WIFI_PASS "90130762"
@@ -433,6 +432,12 @@ void claude_ws_on_message(WebsocketsMessage message) {
         request_display_line2("");
       }
       player_task_handle = (TaskHandle_t)1;
+
+    #ifdef BOARD_AIPI_LITE
+      // The ES8311 input/output paths share the same I2S/codec resources.
+      // Release RX before reconfiguring TX for playback to avoid channel allocation failures.
+      audio_input_deinit();
+    #endif
       
       // ============ AIPI-Lite Speaker Amp Enable ============
 #ifdef BOARD_AIPI_LITE
@@ -716,11 +721,6 @@ void loop_task_sound_recorder(void *pvParameters) {
 
   if (!claude_ws_connected) {
     claude_ws_connect();
-  }
-
-  // Signal backend that we are starting to send audio
-  if (claude_ws_connected) {
-    claude_ws_send_transcribe();
   }
 
   button_abort = false;

@@ -631,6 +631,7 @@ class AudioBuffer:
         self.sample_rate = sample_rate
         self.last_audio_time: Optional[float] = None
         self.speech_start_time: Optional[float] = None
+        self.speech_duration = 0.0
         self.silent_duration = 0.0
         # Internal buffer for VAD windowing (ensures stable RMS on small chunks)
         self.vad_window_buffer = b""
@@ -666,6 +667,7 @@ class AudioBuffer:
                 # Update speech presence (useful for long speech segments)
                 # log(f"[VAD-Window] RMS: {rms:.5f} (speech), silent_duration reset")
                 pass
+            self.speech_duration += duration
             self.silent_duration = 0.0
 
     def add_silence(self, duration: float):
@@ -683,6 +685,7 @@ class AudioBuffer:
         self.buffer = []
         self.vad_window_buffer = b""
         self.speech_start_time = None
+        self.speech_duration = 0.0
         self.silent_duration = 0.0
 
     def check_vad(self) -> bool:
@@ -694,17 +697,16 @@ class AudioBuffer:
         if self.silent_duration >= self.vad_threshold:
             # log(f"[VAD] check_vad: silent_duration={self.silent_duration:.3f}s >= vad_threshold={self.vad_threshold:.3f}s; speech_start_time={self.speech_start_time}")
             # Check we have enough speech duration to care
-            if self.speech_start_time is not None and self.last_audio_time is not None:
-                speech_duration = self.last_audio_time - self.speech_start_time
-                if speech_duration >= self.min_speech:
-                    log(f"[VAD] Silent threshold reached. Silence duration: {self.silent_duration:.2f}s. Speech duration: {speech_duration:.2f}s -> trigger transcription")
+            if self.speech_start_time is not None:
+                if self.speech_duration >= self.min_speech:
+                    log(f"[VAD] Silent threshold reached. Silence duration: {self.silent_duration:.2f}s. Speech duration: {self.speech_duration:.2f}s -> trigger transcription")
                     return True
             
             # If we have reached the silence threshold but never detected speech,
             # or speech was too short, clear the buffer to avoid it growing indefinitely.
             if self.silent_duration > self.vad_threshold * 2:
                 if self.speech_start_time is not None:
-                    log(f"[VAD] Silence threshold reached but speech too short. Silence duration: {self.silent_duration:.2f}s. Speech duration: {self.last_audio_time - self.speech_start_time:.2f}s -> clearing.")
+                    log(f"[VAD] Silence threshold reached but speech too short. Silence duration: {self.silent_duration:.2f}s. Speech duration: {self.speech_duration:.2f}s -> clearing.")
                 self.clear()
 
         return False
