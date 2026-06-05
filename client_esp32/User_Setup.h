@@ -6,6 +6,8 @@
 #ifndef USER_SETUP_H
 #define USER_SETUP_H
 
+#include "sketch_config.h"
+
 #define USER_SETUP_LOADED
 
 #ifdef BOARD_AIPI_LITE

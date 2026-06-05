@@ -47,6 +47,12 @@ RemoteDebug Debug;
 #define DBG_PRINT(msg) do { APP_SERIAL.print(msg); Debug.print(msg); } while(0)
 #define DBG_PRINTF(...) do { APP_SERIAL.printf(__VA_ARGS__); Debug.printf(__VA_ARGS__); } while(0)
 
+#ifdef BOARD_AIPI_LITE
+static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.030f;
+#else
+static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.005f;
+#endif
+
 // Mutex to protect display request buffers
 SemaphoreHandle_t display_mutex = NULL;
 SemaphoreHandle_t ws_mutex = NULL;
@@ -135,6 +141,7 @@ volatile bool display_clear_pending = false;
 WebsocketsClient claude_ws_client;
 volatile bool claude_ws_connected = false;
 volatile bool claude_ws_connecting = false;
+volatile bool claude_ws_config_pending = false;
 
 // Coordinate backend "done" with actual audio playback completion.
 volatile bool resume_recorder_after_response = false;
@@ -144,6 +151,8 @@ volatile bool response_done_received = false;
 volatile bool response_audio_seen = false;
 volatile bool response_audio_done_received = false;
 volatile bool conversation_active = false;
+
+bool claude_ws_send_vad_config(float energy_threshold);
 
 void request_showBootInstructions(const char *text) {
   if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
@@ -306,6 +315,7 @@ void play_backend_audio_base64(const String &b64_audio) {
 #ifdef BOARD_AIPI_LITE
   digitalWrite(SPEAKER_AMP_ENABLE, LOW);  // Disable speaker amp
   delay(10);
+  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_LRCLK, AUDIO_INPUT_DIN);
 #endif
   // ======================================================
 
@@ -392,6 +402,13 @@ void handle_claude_ws_json(const String &json) {
     DBG_PRINTF("[WS] Backend error: %s\n", err.c_str());
     request_display_line1("Backend error");
     request_display_line2(err.c_str());
+  } else if (type == "config_ack") {
+    String threshold = extract_json_string_value(json, "energy_threshold");
+    if (threshold.length() > 0) {
+      DBG_PRINTF("[WS] Config ack energy_threshold=%s\n", threshold.c_str());
+    } else {
+      DBG_PRINTLN("[WS] Config ack received");
+    }
   } else if (type == "pong") {
     DBG_PRINTLN("[WS] pong");
   } else {
@@ -445,6 +462,7 @@ void claude_ws_on_message(WebsocketsMessage message) {
 #ifdef BOARD_AIPI_LITE
       digitalWrite(SPEAKER_AMP_ENABLE, LOW);  // Disable speaker amp
       delay(10);
+      audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_LRCLK, AUDIO_INPUT_DIN);
 #endif
       // ======================================================
 
@@ -463,6 +481,9 @@ void claude_ws_on_event(WebsocketsEvent event, String data) {
       claude_ws_connected = true;
       claude_ws_connecting = false;
       DBG_PRINTLN("[WS] Connection opened");
+      // Defer config send to main loop to avoid taking ws_mutex re-entrantly
+      // from within poll() callback context.
+      claude_ws_config_pending = true;
       request_display_line2("Connected using GL router");
       break;
     case WebsocketsEvent::ConnectionClosed:
@@ -555,6 +576,25 @@ bool claude_ws_send_transcribe() {
   return true;
 }
 
+bool claude_ws_send_vad_config(float energy_threshold) {
+  if (!claude_ws_connected) return false;
+  char msg[96];
+  snprintf(msg, sizeof(msg), "{\"type\":\"config\",\"energy_threshold\":%.5f}", energy_threshold);
+
+  bool ok = false;
+  if (ws_mutex) xSemaphoreTake(ws_mutex, portMAX_DELAY);
+  ok = claude_ws_client.send(msg);
+  if (ws_mutex) xSemaphoreGive(ws_mutex);
+
+  if (!ok) {
+    DBG_PRINTLN("[WS] Failed to send config message");
+    claude_ws_connected = false;
+    return false;
+  }
+  DBG_PRINTF("[WS] Sent config energy_threshold=%.5f\n", energy_threshold);
+  return true;
+}
+
 // Track last debounced button state to detect edges
 int last_button_state_for_toggle = Button::KEY_STATE_IDLE;
 
@@ -623,6 +663,7 @@ void setup() {
   } else {
     APP_SERIAL.println("[Setup] I2S output (MCLK) initialized");
   }
+  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_LRCLK, AUDIO_INPUT_DIN);
 #else
   if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
     APP_SERIAL.println("[Setup] I2S output init failed");
@@ -924,6 +965,11 @@ void loop() {
   // Keep websocket alive and process backend messages.
   Debug.handle();
   claude_ws_poll();
+  if (claude_ws_connected && claude_ws_config_pending) {
+    if (claude_ws_send_vad_config(CLIENT_VAD_ENERGY_THRESHOLD)) {
+      claude_ws_config_pending = false;
+    }
+  }
   // Light reconnect policy while idle.
   static unsigned long last_ws_retry = 0;
   if (!claude_ws_connected && millis() - last_ws_retry > 2000) {
