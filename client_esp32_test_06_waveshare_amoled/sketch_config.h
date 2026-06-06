@@ -1,0 +1,23 @@
+#ifndef SKETCH_CONFIG_H
+#define SKETCH_CONFIG_H
+
+// Build for Waveshare ESP32-S3-Touch-AMOLED-1.8
+#define BOARD_WAVESHARE_AMOLED
+
+#ifndef ARDUINO_USB_CDC_ON_BOOT
+#define ARDUINO_USB_CDC_ON_BOOT 1
+#endif
+
+#ifndef ARDUINO_USB_MODE
+#define ARDUINO_USB_MODE 1
+#endif
+
+#ifndef ARDUINO_USB_MSC_ON_BOOT
+#define ARDUINO_USB_MSC_ON_BOOT 0
+#endif
+
+#ifndef ARDUINO_USB_DFU_ON_BOOT
+#define ARDUINO_USB_DFU_ON_BOOT 0
+#endif
+
+#endif
