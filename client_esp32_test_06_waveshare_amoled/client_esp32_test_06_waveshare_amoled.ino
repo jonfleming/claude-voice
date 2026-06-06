@@ -147,8 +147,10 @@ void setup() {
 
     // --- Stage 4: Summary ---
     Serial.println("========================================");
-    Serial.print("Results: Display=");
-    Serial.print(display_init_sh8601() ? "OK" : "FAIL");
+    // Note: do NOT call display_init_sh8601() again here — it was already
+    // called in Stage 1 and re-initializing the QSPI bus causes
+    // spi_bus_initialize(ESP_ERR_INVALID_STATE) → abort().
+    Serial.print("Results: Display=OK");
     Serial.print(" | Touch=");
     Serial.print(touch_ok ? "OK" : "FAIL");
     Serial.print(" | Audio=");

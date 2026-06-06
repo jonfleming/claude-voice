@@ -1,3 +1,19 @@
+// driver_audio_output.cpp
+// I2S audio output driver for ESP32-S3 with ring buffer integration.
+//
+// Architecture:
+//   Ring buffer (4096 bytes, 256ms depth)
+//     -> player task drains -> I2S streaming write
+//     -> mono-to-stereo expansion -> ES8311 / I2S peripheral
+//
+// Latency budget:
+//   - Ring buffer: 4096 bytes = 256ms (worst case, full)
+//   - Typical drain interval: 10ms (main loop)
+//   - Combined typical latency: ~20-50ms
+//
+// The ring buffer decouples WebSocket audio receive timing from
+// I2S playback timing, preventing buffer underruns when audio
+// arrives in bursts.
 
 #include "driver_audio_output.h"
 #include "board_pins.h"
@@ -5,10 +21,10 @@
 #include <ESP_I2S.h>
 #include <Wire.h>
 
-#ifndef AUDIO_OUTPUT_DEBUG_SERIAL
-#define AUDIO_OUTPUT_DEBUG_SERIAL Serial
-#endif
+// Playback ring buffer (separate from capture ring buffer)
+static audio_ring_buffer_t s_playback_rb;
 
+// Audio library instance
 Audio audio;
 I2SClass i2s_output;
 
@@ -124,7 +140,6 @@ bool audio_output_codec_init(void) {
   ok &= es8311_update(0x31, 0x9F, 0x00);
 
   // Enable the ES8311 microphone ADC path for capture tests.
-  // This mirrors the ES8311 setup sequence used by the working ESPHome config.
   ok &= es8311_write(0x14, 0x1A);
   ok &= es8311_write(0x16, 0x00);
   ok &= es8311_write(0x17, 0xC8);
@@ -292,6 +307,30 @@ void i2s_output_deinit(void)
 { 
     i2s_output.end(); 
 }
+
+// --- Ring buffer playback API ---
+
+void audio_output_ring_buffer_init(void) {
+    audio_ring_buffer_init(&s_playback_rb);
+}
+
+audio_ring_buffer_t* audio_output_ring_buffer_get(void) {
+    return &s_playback_rb;
+}
+
+size_t audio_output_ring_buffer_write(const int16_t *src, size_t count) {
+    return audio_ring_buffer_write(&s_playback_rb, src, count);
+}
+
+size_t audio_output_ring_buffer_available_samples(void) {
+    return audio_ring_buffer_available(&s_playback_rb);
+}
+
+size_t audio_output_ring_buffer_free_samples(void) {
+    return audio_ring_buffer_free(&s_playback_rb);
+}
+
+// --- Legacy API ---
 
 //Initialize the audio interface
 int audio_output_init(int bclk, int lrc, int dout) {
