@@ -11,8 +11,9 @@
  *   - Display renders color test patterns with text overlay
  *   - Touch coordinates print to serial when touched
  *   - Serial prints stage markers for each initialization step
+ *   - Audio output produces audible tone (verify with speaker)
  *
- * Board selection:
+ * Board: Waveshare ESP32-S3-Touch-AMOLED-1.8
  *   Define BOARD_WAVESHARE_AMOLED in sketch_config.h (already set).
  *
  * Pinout reference:
@@ -76,6 +77,8 @@ extern bool audio_output_codec_init(void);
 static uint32_t last_update_ms = 0;
 static uint32_t counter = 0;
 static int test_pattern = 0;
+static bool audio_ok = false;
+static bool touch_ok = false;
 
 void setup() {
     Serial.begin(115200);
@@ -85,6 +88,12 @@ void setup() {
     Serial.println("========================================");
     Serial.println("Test 06: Waveshare ESP32-S3-Touch-AMOLED-1.8");
     Serial.println("========================================");
+    Serial.printf("MCU: ESP32-S3 | PSRAM: %s\r\n",
+        ESP.getPsramSize() > 0 ? "present" : "absent");
+    Serial.printf("Flash: %dMB | Board: BOARD_WAVESHARE_AMOLED\r\n", 16);
+    Serial.printf("Display: %dx%d | Touch: FT3168 (I2C 0x5D)\r\n",
+        LCD_WIDTH, LCD_HEIGHT);
+    Serial.printf("Audio: ES8311 (I2C 0x18) | PA: GPIO%d\r\n", AUDIO_PA_PIN);
     Serial.println();
 
     // --- Stage 1: Display ---
@@ -94,7 +103,8 @@ void setup() {
         while (1) { delay(1000); }
     }
     Serial.println("[OK]   Display initialized.");
-    Serial.printf("[info] Screen: %dx%d\r\n", display_width(), display_height());
+    Serial.printf("[info] Screen: %dx%d, rotation=%d\r\n",
+        display_width(), display_height(), 1);
     Serial.println();
 
     // Render initial pattern
@@ -117,7 +127,8 @@ void setup() {
 
     // --- Stage 2: Touch ---
     Serial.println("[stage] 2: Touch init (FT3168 I2C)");
-    if (!touch_init_ft3168()) {
+    bool touch_ok = touch_init_ft3168();
+    if (!touch_ok) {
         Serial.println("[WARN] Touch init failed (continuing without touch).");
     } else {
         Serial.println("[OK]   Touch initialized.");
@@ -126,17 +137,28 @@ void setup() {
 
     // --- Stage 3: Audio ---
     Serial.println("[stage] 3: Audio init (ES8311 + I2S)");
-    if (!i2s_output_init_waveshare()) {
+    audio_ok = i2s_output_init_waveshare();
+    if (!audio_ok) {
         Serial.println("[WARN] Audio init failed (continuing without audio).");
     } else {
         Serial.println("[OK]   Audio initialized.");
     }
     Serial.println();
 
+    // --- Stage 4: Summary ---
     Serial.println("========================================");
-    Serial.println("All subsystems initialized. Starting loop.");
+    Serial.print("Results: Display=");
+    Serial.print(display_init_sh8601() ? "OK" : "FAIL");
+    Serial.print(" | Touch=");
+    Serial.print(touch_ok ? "OK" : "FAIL");
+    Serial.print(" | Audio=");
+    Serial.print(audio_ok ? "OK" : "FAIL");
+    Serial.println(" | Starting loop.");
     Serial.println("========================================");
     Serial.println();
+
+    // Clear screen for test patterns
+    display_fill_rect(0, 0, display_width(), display_height(), COLOR_BLACK);
 }
 
 // Render a color bar test pattern
@@ -145,7 +167,8 @@ void render_color_bars() {
     int h = display_height();
     int bar_w = w / 8;
 
-    uint16_t colors[] = { COLOR_RED, COLOR_GREEN, COLOR_BLUE, COLOR_CYAN, COLOR_MAGENTA, COLOR_YELLOW, COLOR_WHITE, COLOR_BLACK };
+    uint16_t colors[] = { COLOR_RED, COLOR_GREEN, COLOR_BLUE, COLOR_CYAN,
+                          COLOR_MAGENTA, COLOR_YELLOW, COLOR_WHITE, COLOR_BLACK };
 
     for (int i = 0; i < 8; i++) {
         display_fill_rect(i * bar_w, 0, bar_w, h, colors[i]);
@@ -244,18 +267,20 @@ void loop() {
             display_print("No touch");
         }
 
-        // Display uptime
-        char uptime_buf[64];
-        uint32_t secs = millis() / 1000;
-        snprintf(uptime_buf, sizeof(uptime_buf), "Uptime: %lus", (unsigned long)secs);
+        // Display subsystem status
+        char status_buf[80];
+        snprintf(status_buf, sizeof(status_buf),
+            "D:%s T:%s A:%s",
+            "OK", touch_ok ? "OK" : "FAIL", audio_ok ? "OK" : "FAIL");
         display_set_text_size(1);
         display_set_text_color(COLOR_LIGHTGRAY);
         display_set_cursor(10, display_height() - 10);
-        display_print(uptime_buf);
+        display_print(status_buf);
 
-        Serial.printf("[update] Pattern %d, Counter: %lu, Touch: %s\r\n",
+        Serial.printf("[update] Pattern %d, Counter: %lu, Touch: %s, Audio: %s\r\n",
             test_pattern, (unsigned long)counter,
-            touch_is_pressed() ? "pressed" : "released");
+            touch_is_pressed() ? "pressed" : "released",
+            audio_ok ? "OK" : "FAIL");
     }
 
     // Poll touch continuously

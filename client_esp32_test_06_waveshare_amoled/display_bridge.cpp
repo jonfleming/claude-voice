@@ -1,6 +1,12 @@
-// Compile the shared display/LVGL stack as a sketch source unit.
-// For Waveshare AMOLED: use Arduino_GFX with SH8601 QSPI driver.
-// This replaces the TFT_eSPI-based display.cpp used by Freenove/AIPI-Lite.
+// Display bridge for Waveshare ESP32-S3-Touch-AMOLED-1.8
+// Uses Arduino_GFX with SH8601 QSPI AMOLED driver (368x448, RGB565)
+//
+// SH8601 QSPI pinout:
+//   SDIO0=GPIO4, SDIO1=GPIO5, SDIO2=GPIO6, SDIO3=GPIO7
+//   SCLK=GPIO11, CS=GPIO12
+//
+// Note: SH8601 uses QSPI (quad SPI) data bus, not standard SPI.
+// The Arduino_ESP32QSPI class handles the ESP32-S3 QSPI peripheral.
 
 #include "board_pins.h"
 #include <Arduino.h>
@@ -12,6 +18,13 @@
 
 #ifndef DISPLAY_DEBUG_SERIAL
 #define DISPLAY_DEBUG_SERIAL Serial
+#endif
+
+// SH8601 reset pin (if available on board)
+// The Waveshare AMOLED-1.8 may not have a separate reset pin;
+// the SH8601 can be reset via QSPI command sequence.
+#ifndef SH8601_RST_PIN
+#define SH8601_RST_PIN GFX_NOT_DEFINED
 #endif
 
 // QSPI data bus for SH8601
@@ -29,18 +42,25 @@ bool display_init_sh8601() {
     );
 
     // Create SH8601 display driver
-    gfx = new Arduino_SH8601(gfx_bus, GFX_NOT_DEFINED, 0, LCD_WIDTH, LCD_HEIGHT);
+    // Parameters: bus, CS, SPI clock, width, height
+    gfx = new Arduino_SH8601(gfx_bus, SH8601_RST_PIN, 0, LCD_WIDTH, LCD_HEIGHT);
 
     if (!gfx->begin()) {
         DISPLAY_DEBUG_SERIAL.println("[display] SH8601 begin() FAILED!");
         return false;
     }
 
-    gfx->setRotation(1);  // Landscape orientation
+    // Landscape orientation (rotation 1 = 90 degrees clockwise)
+    gfx->setRotation(1);
+
+    // Fill black
     gfx->fillScreen(RGB565_BLACK);
+
+    // Set brightness to maximum
     gfx->setBrightness(255);
 
-    DISPLAY_DEBUG_SERIAL.printf("[display] SH8601 initialized: %dx%d\r\n", LCD_WIDTH, LCD_HEIGHT);
+    DISPLAY_DEBUG_SERIAL.printf("[display] SH8601 initialized: %dx%d, rotation=%d\r\n",
+        LCD_WIDTH, LCD_HEIGHT, gfx->getRotation());
     return true;
 }
 
