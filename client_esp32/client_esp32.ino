@@ -50,7 +50,7 @@ RemoteDebug Debug;
 #ifdef BOARD_AIPI_LITE
 static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.004f;
 #else
-static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.005f;
+static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.07f;
 #endif
 
 // Mutex to protect display request buffers
