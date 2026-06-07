@@ -154,7 +154,7 @@ void my_disp_flush(lv_disp_drv_t * disp, const lv_area_t * area, lv_color_t * px
 
 // Keypad read function (LVGL 8.x API)
 #ifndef BOARD_AIPI_LITE
-void my_keypad_read(lv_indev_t * indev, lv_indev_data_t * data)
+void my_keypad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
 {
   static int last_key = 0;
 
