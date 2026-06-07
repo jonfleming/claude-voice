@@ -23,6 +23,11 @@
 
 extern lv_indev_t* indev_keypad;  // External declaration of the keypad input device
 
+#if defined(BOARD_WAVESHARE_AMOLED)
+extern lv_indev_t *touch_indev;     // LVGL touch input device
+extern bool touch_input_registered; // Whether touch input was registered
+#endif
+
 // Display class handles LVGL integration for all board types
 class Display {
 private:

@@ -1,6 +1,7 @@
 #include <SPI.h>
 
 #include "display.h"
+#include "driver_touch.h"
 
 #ifndef BUTTON_PIN
 #define BUTTON_PIN 19   // Freenove default; overridden by board_pins.h for other boards
@@ -11,6 +12,11 @@
 #endif
 
 lv_indev_t *indev_keypad; // External declaration of the keypad input device
+
+#if defined(BOARD_WAVESHARE_AMOLED)
+lv_indev_t *touch_indev = NULL;
+bool touch_input_registered = false;
+#endif
 
 // =============================================================================
 // Screen dimensions per board
@@ -209,6 +215,20 @@ void my_keypad_read(lv_indev_t * indev, lv_indev_data_t * data)
 }
 #endif
 
+// Touch read function (LVGL 9.x API) — Waveshare only
+#if defined(BOARD_WAVESHARE_AMOLED)
+void my_touchpad_read(lv_indev_t * indev, lv_indev_data_t * data)
+{
+  if (touch_read()) {
+    data->point.x = touch_get_x();
+    data->point.y = touch_get_y();
+    data->state = LV_INDEV_STATE_PRESSED;
+  } else {
+    data->state = LV_INDEV_STATE_RELEASED;
+  }
+}
+#endif
+
 // =============================================================================
 // Board-specific TFT/display initialization
 // =============================================================================
@@ -336,6 +356,15 @@ void setupLVGL()
   indev_keypad = indev;
 #else
   indev_keypad = nullptr;
+#endif
+
+#if defined(BOARD_WAVESHARE_AMOLED)
+  // Register touch input device for Waveshare AMOLED
+  lv_indev_t *touch = lv_indev_create();
+  lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
+  lv_indev_set_read_cb(touch, my_touchpad_read);
+  touch_indev = touch;
+  touch_input_registered = true;
 #endif
 }
 

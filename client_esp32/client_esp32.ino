@@ -28,6 +28,7 @@
 #include <RemoteDebug.h>
 // Display
 #include "display.h"
+#include "driver_touch.h"
 #include <lvgl.h>
 #include <freertos/semphr.h>
 #include <math.h>
@@ -662,6 +663,16 @@ void setup() {
   // Button
   button.init();
   APP_SERIAL.println("[Setup] Button initialized");
+
+  // Touch (Waveshare only)
+#if defined(BOARD_WAVESHARE_AMOLED)
+  APP_SERIAL.println("[Setup] Initializing FT3168 touch controller...");
+  if (touch_init()) {
+    APP_SERIAL.println("[Setup] FT3168 touch initialized successfully");
+  } else {
+    APP_SERIAL.println("[Setup] FT3168 touch init FAILED — falling back to button-only input");
+  }
+#endif
 
   // Initialize the I2S bus for audio input
 #ifdef BOARD_AIPI_LITE
