@@ -35,8 +35,8 @@ static const uint16_t screenWidth = 320;
 static const uint16_t screenHeight = 480;
 #endif
 
-// LVGL draw buffer (LVGL 9.x uses uint8_t buffers)
-static lv_draw_buf_t draw_buf;
+// LVGL draw buffer backing storage (LVGL 8)
+static lv_disp_draw_buf_t draw_buf;
 static lv_color_t buf[screenWidth * screenHeight / 5];
 
 // =============================================================================
@@ -121,13 +121,13 @@ void my_print(const char *buf)
 #endif
 
 // =============================================================================
-// LVGL 9.x flush callback — board-specific implementations
+// LVGL 8.x flush callback — board-specific implementations
 // =============================================================================
 
 #ifdef BOARD_WAVESHARE_AMOLED
 
 // Waveshare QSPI AMOLED flush using Arduino_SH8601
-void my_disp_flush(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)
+void my_disp_flush(lv_disp_drv_t * disp, const lv_area_t * area, lv_color_t * px_map)
 {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
@@ -138,13 +138,13 @@ void my_disp_flush(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map
   s_gfx->writePixels((uint16_t *)px_map, w * h);
   s_gfx->endWrite();
 
-  lv_display_flush_ready(disp);
+  lv_disp_flush_ready(disp);
 }
 
 #else
 
 // Freenove / AIPI-Lite flush using TFT_eSPI
-void my_disp_flush(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)
+void my_disp_flush(lv_disp_drv_t * disp, const lv_area_t * area, lv_color_t * px_map)
 {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
@@ -153,14 +153,14 @@ void my_disp_flush(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map
   tft.setAddrWindow(area->x1, area->y1, w, h);
   tft.pushColors((uint16_t *)px_map, w * h, true);
   tft.endWrite();
-  lv_display_flush_ready(disp);
+  lv_disp_flush_ready(disp);
 }
 
 #endif
 
-// Keypad read function (LVGL 9.x API)
+// Keypad read function (LVGL 8.x API)
 #ifndef BOARD_AIPI_LITE
-void my_keypad_read(lv_indev_t * indev, lv_indev_data_t * data)
+void my_keypad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
 {
   static int last_key = 0;
 
@@ -324,7 +324,7 @@ void setupTFT(int direction)
 #endif
 }
 
-// Setup LVGL 9.x
+// Setup LVGL 8.x
 void setupLVGL()
 {
 #if LV_USE_LOG != 0
@@ -332,28 +332,28 @@ void setupLVGL()
 #endif
   lv_init();
 
-  // Create display with landscape orientation (hor=screenHeight, ver=screenWidth)
-  lv_display_t *disp = lv_display_create(screenHeight, screenWidth);
-  lv_display_set_default(disp);
+  // Initialize draw buffer (buffer size is in pixels for LVGL 8)
+  lv_disp_draw_buf_init(&draw_buf, buf, NULL, screenWidth * screenHeight / 5);
 
-  // Set color format to RGB565 (AMOLED displays use 16-bit color)
-  lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
-
-  // Set the draw buffer
-  lv_display_set_buffers(disp, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
-
-  // Set the flush callback
-  lv_display_set_flush_cb(disp, my_disp_flush);
+  // Register display driver
+  lv_disp_drv_t disp_drv;
+  lv_disp_drv_init(&disp_drv);
+  disp_drv.hor_res = screenHeight;
+  disp_drv.ver_res = screenWidth;
+  disp_drv.flush_cb = my_disp_flush;
+  disp_drv.draw_buf = &draw_buf;
+  lv_disp_t *disp = lv_disp_drv_register(&disp_drv);
 
   // Set rotation (Waveshare is already in landscape via setRotation(1))
-  lv_display_set_rotation(disp, (lv_display_rotation_t)display.getTftShowDirection());
+  lv_disp_set_rotation(disp, (lv_disp_rot_t)display.getTftShowDirection());
 
   // Initialize the input device driver (keypad)
 #ifndef BOARD_AIPI_LITE
-  lv_indev_t *indev = lv_indev_create();
-  lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
-  lv_indev_set_read_cb(indev, my_keypad_read);
-  indev_keypad = indev;
+  lv_indev_drv_t indev_drv;
+  lv_indev_drv_init(&indev_drv);
+  indev_drv.type = LV_INDEV_TYPE_KEYPAD;
+  indev_drv.read_cb = my_keypad_read;
+  indev_keypad = lv_indev_drv_register(&indev_drv);
 #else
   indev_keypad = nullptr;
 #endif

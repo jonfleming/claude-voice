@@ -154,7 +154,8 @@ size_t audio_dma_playback_write(const uint8_t *data, size_t len) {
         
         // Check if I2S buffer has space
         // ESP_I2S doesn't expose buffer occupancy directly, so we write and check return value
-        size_t w = i2s_playback.write(ptr, burst);
+        // ESP_I2S::write expects a mutable pointer but does not modify payload.
+        size_t w = i2s_playback.write(const_cast<uint8_t *>(ptr), burst);
         if (w == 0) {
             // Buffer full, yield and retry
             vTaskDelay(1 / portTICK_PERIOD_MS);
