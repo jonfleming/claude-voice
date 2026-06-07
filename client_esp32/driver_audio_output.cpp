@@ -17,15 +17,18 @@
 
 #include "driver_audio_output.h"
 #include "board_pins.h"
-#include "Audio.h"
 #include <ESP_I2S.h>
 #include <Wire.h>
+
+// Debug serial for audio output (use Serial1 to avoid USB CDC dependency)
+#ifndef AUDIO_OUTPUT_DEBUG_SERIAL
+#define AUDIO_OUTPUT_DEBUG_SERIAL Serial1
+#endif
 
 // Playback ring buffer (separate from capture ring buffer)
 static audio_ring_buffer_t s_playback_rb;
 
-// Audio library instance
-Audio audio;
+// I2S output class instance
 I2SClass i2s_output;
 
 static uint16_t s_bits_per_sample = 32;
@@ -36,7 +39,7 @@ static int s_mclk_pin = -1;
 namespace {
 
 bool es8311_write(uint8_t reg, uint8_t value) {
-#ifdef BOARD_AIPI_LITE
+#if defined(BOARD_AIPI_LITE) || defined(BOARD_WAVESHARE_AMOLED)
   Wire.beginTransmission(ES8311_I2C_ADDR);
   Wire.write(reg);
   Wire.write(value);
@@ -50,7 +53,7 @@ bool es8311_write(uint8_t reg, uint8_t value) {
 }
 
 bool es8311_read(uint8_t reg, uint8_t *value) {
-#ifdef BOARD_AIPI_LITE
+#if defined(BOARD_AIPI_LITE) || defined(BOARD_WAVESHARE_AMOLED)
   Wire.beginTransmission(ES8311_I2C_ADDR);
   Wire.write(reg);
   if (Wire.endTransmission(false) != 0) {
@@ -94,10 +97,12 @@ bool i2s_output_init_mclk(int mclk, int bclk, int lrc, int dout) {
 }
 
 bool audio_output_codec_init(void) {
-#ifndef BOARD_AIPI_LITE
-  return true;
-#else
+#if defined(BOARD_AIPI_LITE)
   Wire.begin(ES8311_I2C_SDA, ES8311_I2C_SCL);
+#elif defined(BOARD_WAVESHARE_AMOLED)
+  // Waveshare shares I2C bus with touch controller: SDA=GPIO15, SCL=GPIO14
+  Wire.begin(15, 14);
+#endif
 
   uint8_t chip_id = 0;
   if (!es8311_read(0xFD, &chip_id)) {
@@ -111,7 +116,7 @@ bool audio_output_codec_init(void) {
   ok &= es8311_write(0x00, 0x00);
 
   // 16 kHz, 16-bit I2S using MCLK = sample_rate * 256 = 4.096 MHz.
-  ok &= es8311_write(0x01, 0x3F);        // Reset
+  ok &= es8311_write(0x01, 0x3F);
   
   ok &= es8311_update(0x02, 0x07, 0x08);
   ok &= es8311_write(0x03, 0x10);
@@ -150,7 +155,6 @@ bool audio_output_codec_init(void) {
 
   AUDIO_OUTPUT_DEBUG_SERIAL.println(ok ? "ES8311 codec initialized." : "ES8311 codec init failed.");
   return ok;
-#endif
 }
 
 extern volatile TaskHandle_t player_task_handle;
@@ -330,13 +334,20 @@ size_t audio_output_ring_buffer_free_samples(void) {
     return audio_ring_buffer_free(&s_playback_rb);
 }
 
-// --- Legacy API ---
+size_t audio_output_ring_buffer_drain(int16_t *dst, size_t count) {
+    return audio_ring_buffer_read(&s_playback_rb, dst, count);
+}
+
+// --- Legacy API (MP3 Audio library dependent — stubbed for ESP32-Waveshare) ---
+// These functions depend on the justflash1993/Arduino-Audio MP3 decoder library,
+// which is not installed and not needed for the Waveshare streaming port.
+// The streaming API (i2s_output_stream_begin/write/end) is used instead.
 
 //Initialize the audio interface
 int audio_output_init(int bclk, int lrc, int dout) {
   i2s_output_init(bclk, lrc, dout);
   i2s_output_deinit();
-  return audio.setPinout(bclk, lrc, dout);
+  return 0; // stub: MP3 library not available
 }
 
 //Set the volume: 0-21
@@ -344,62 +355,56 @@ void audio_output_set_volume(int volume) {
   if (volume < 0) volume = 0;
   if (volume > 21) volume = 21;
   s_volume_factor = (float)volume / 21.0f;
-  audio.setVolume(volume);
-  AUDIO_OUTPUT_DEBUG_SERIAL.println("Set volume to " + String(volume));
+  Serial1.printf("[audio] Set volume to %d\n", volume);
 }
 
 //Query volume
 int audio_read_output_volume(void) {
-  return audio.getVolume();
+  return (int)(s_volume_factor * 21);
 }
 
-//Pause/play the music
+//Pause/play the music (stub)
 void audio_output_pause_resume(void) {
-  audio.pauseResume();
 }
 
-//Stop the music
+//Stop the music (stub)
 void audio_output_stop(void) {
-  audio.stopSong();
 }
 
 //Whether the music is running
 bool audio_output_is_running(void) {
-  return audio.isRunning();
+  return false; // stub: MP3 library not available
 }
 
 //Gets how long the music player has been playing
 long audio_get_total_output_playing_time(void) {
-  return (long)audio.getTotalPlayingTime() / 1000;
+  return 0; // stub
 }
 
 //Obtain the playing time of the music file
 long audio_output_get_file_duration(void) {
-  return (long)audio.getAudioFileDuration();
+  return 0; // stub
 }
 
 //Set play position
 bool audio_output_set_play_position(int second) {
-  return audio.setAudioPlayPosition((uint16_t)second);
+  return false; // stub
 }
 
 //Gets the current playing time of the music
 long audio_read_output_play_position(void) {
-  return audio.getAudioCurrentTime();
+  return 0; // stub
 }
 
-//Non-blocking music execution function
+//Non-blocking music execution function (stub)
 void audio_output_loop(void) {
-  audio.loop();
 }
 
-// optional
+// optional audio callbacks (stub)
 void audio_info(const char *info) {
-  AUDIO_OUTPUT_DEBUG_SERIAL.print("info        ");
-  AUDIO_OUTPUT_DEBUG_SERIAL.println(info);
+  Serial1.printf("[audio] info: %s\n", info);
 }
 
 void audio_eof_mp3(const char *info) {
-  AUDIO_OUTPUT_DEBUG_SERIAL.print("eof_mp3     ");
-  AUDIO_OUTPUT_DEBUG_SERIAL.println(info);
+  Serial1.printf("[audio] eof_mp3: %s\n", info);
 }

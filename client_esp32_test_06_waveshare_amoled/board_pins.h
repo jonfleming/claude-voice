@@ -31,6 +31,7 @@
 #define TOUCH_INT         21
 
 // Audio (ES8311 codec)
+#define ES8311_I2C_ADDR         0x18
 #define AUDIO_I2S_MCK     16
 #define AUDIO_I2S_BCK      9
 #define AUDIO_I2S_DI       8  // MIC input

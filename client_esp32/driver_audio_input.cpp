@@ -46,10 +46,10 @@ void audio_input_init(uint8_t sck, uint8_t ws, uint8_t din) {
     // Initialize I2S at 16kHz, 32-bit stereo
     if (!s_i2s_input.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_32BIT,
                            I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
-        Serial.println("[audio_in] Failed to initialize I2S bus!");
+        Serial1.println("[audio_in] Failed to initialize I2S bus!");
         return;
     }
-    Serial.printf("[audio_in] I2S bus initialized at 16kHz. rx=%s\r\n",
+    Serial1.printf("[audio_in] I2S bus initialized at 16kHz. rx=%s\r\n",
                   s_i2s_input.rxChan() ? "ok" : "null");
 }
 
@@ -61,16 +61,16 @@ void audio_input_init_mclk(uint8_t mclk, uint8_t sck, uint8_t ws, uint8_t din) {
     // Initialize I2S at 16kHz, 32-bit stereo
     if (!s_i2s_input.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_32BIT,
                            I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
-        Serial.printf("[audio_in] Failed to initialize I2S bus (MCLK=%d)\n", mclk);
+        Serial1.printf("[audio_in] Failed to initialize I2S bus (MCLK=%d)\n", mclk);
         return;
     }
-    Serial.printf("[audio_in] I2S bus initialized at 16kHz (MCLK=%d). rx=%s\r\n",
+    Serial1.printf("[audio_in] I2S bus initialized at 16kHz (MCLK=%d). rx=%s\r\n",
                   mclk, s_i2s_input.rxChan() ? "ok" : "null");
 }
 
 void audio_input_deinit(void) {
     s_i2s_input.end();
-    Serial.println("[audio_in] I2S deinitialized");
+    Serial1.println("[audio_in] I2S deinitialized");
 }
 
 uint8_t* audio_input_record_wav(uint32_t duration, size_t& wav_size) {
@@ -79,10 +79,10 @@ uint8_t* audio_input_record_wav(uint32_t duration, size_t& wav_size) {
 
 void audio_input_print_buffer(uint8_t* buffer, size_t size) {
     for (size_t i = 0; i < size; i++) {
-        Serial.print(buffer[i]);
-        Serial.print(" ");
+        Serial1.print(buffer[i]);
+        Serial1.print(" ");
     }
-    Serial.println();
+    Serial1.println();
 }
 
 size_t audio_input_read_iis_data(char* buffer, size_t size) {

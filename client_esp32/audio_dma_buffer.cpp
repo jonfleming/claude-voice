@@ -31,11 +31,11 @@ bool audio_dma_capture_init_mclk(uint8_t mclk, uint8_t bclk, uint8_t lrclk, uint
     if (!i2s_capture.begin(I2S_MODE_STD, AUDIO_I2S_SAMPLE_RATE,
                            AUDIO_I2S_BITS_PER_SAMPLE, AUDIO_I2S_CHANNEL_MODE,
                            I2S_STD_SLOT_BOTH)) {
-        Serial.printf("[dma] I2S capture init failed (MCLK=%d)\n", mclk);
+        Serial1.printf("[dma] I2S capture init failed (MCLK=%d)\n", mclk);
         return false;
     }
     
-    Serial.printf("[dma] I2S capture initialized at %dHz (MCLK=%d)\n",
+    Serial1.printf("[dma] I2S capture initialized at %dHz (MCLK=%d)\n",
                   AUDIO_I2S_SAMPLE_RATE, mclk);
     s_state = AUDIO_STATE_CAPTURING;
     return true;
@@ -51,11 +51,11 @@ bool audio_dma_capture_init(uint8_t bclk, uint8_t lrclk, uint8_t din) {
     if (!i2s_capture.begin(I2S_MODE_STD, AUDIO_I2S_SAMPLE_RATE,
                            AUDIO_I2S_BITS_PER_SAMPLE, AUDIO_I2S_CHANNEL_MODE,
                            I2S_STD_SLOT_BOTH)) {
-        Serial.printf("[dma] I2S capture init failed (no MCLK)\n");
+        Serial1.printf("[dma] I2S capture init failed (no MCLK)\n");
         return false;
     }
     
-    Serial.printf("[dma] I2S capture initialized at %dHz (no MCLK)\n",
+    Serial1.printf("[dma] I2S capture initialized at %dHz (no MCLK)\n",
                   AUDIO_I2S_SAMPLE_RATE);
     s_state = AUDIO_STATE_CAPTURING;
     return true;
@@ -64,7 +64,7 @@ bool audio_dma_capture_init(uint8_t bclk, uint8_t lrclk, uint8_t din) {
 void audio_dma_capture_deinit(void) {
     i2s_capture.end();
     s_state = (s_state == AUDIO_STATE_BOTH) ? AUDIO_STATE_PLAYING : AUDIO_STATE_IDLE;
-    Serial.println("[dma] I2S capture deinitialized");
+    Serial1.println("[dma] I2S capture deinitialized");
 }
 
 size_t audio_dma_capture_read(uint8_t *dest, size_t max_bytes) {
@@ -103,11 +103,11 @@ bool audio_dma_playback_init_mclk(uint8_t mclk, uint8_t bclk, uint8_t lrclk, uin
     if (!i2s_playback.begin(I2S_MODE_STD, AUDIO_I2S_SAMPLE_RATE,
                             I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO,
                             I2S_STD_SLOT_LEFT)) {
-        Serial.printf("[dma] I2S playback init failed (MCLK=%d)\n", mclk);
+        Serial1.printf("[dma] I2S playback init failed (MCLK=%d)\n", mclk);
         return false;
     }
     
-    Serial.printf("[dma] I2S playback initialized at %dHz (MCLK=%d)\n",
+    Serial1.printf("[dma] I2S playback initialized at %dHz (MCLK=%d)\n",
                   AUDIO_I2S_SAMPLE_RATE, mclk);
     s_state = (s_state == AUDIO_STATE_CAPTURING) ? AUDIO_STATE_BOTH : AUDIO_STATE_PLAYING;
     return true;
@@ -123,11 +123,11 @@ bool audio_dma_playback_init(uint8_t bclk, uint8_t lrclk, uint8_t dout) {
     if (!i2s_playback.begin(I2S_MODE_STD, AUDIO_I2S_SAMPLE_RATE,
                             I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO,
                             I2S_STD_SLOT_LEFT)) {
-        Serial.printf("[dma] I2S playback init failed (no MCLK)\n");
+        Serial1.printf("[dma] I2S playback init failed (no MCLK)\n");
         return false;
     }
     
-    Serial.printf("[dma] I2S playback initialized at %dHz (no MCLK)\n",
+    Serial1.printf("[dma] I2S playback initialized at %dHz (no MCLK)\n",
                   AUDIO_I2S_SAMPLE_RATE);
     s_state = (s_state == AUDIO_STATE_CAPTURING) ? AUDIO_STATE_BOTH : AUDIO_STATE_PLAYING;
     return true;
@@ -136,7 +136,7 @@ bool audio_dma_playback_init(uint8_t bclk, uint8_t lrclk, uint8_t dout) {
 void audio_dma_playback_deinit(void) {
     i2s_playback.end();
     s_state = (s_state == AUDIO_STATE_BOTH) ? AUDIO_STATE_CAPTURING : AUDIO_STATE_IDLE;
-    Serial.println("[dma] I2S playback deinitialized");
+    Serial1.println("[dma] I2S playback deinitialized");
 }
 
 size_t audio_dma_playback_write(const uint8_t *data, size_t len) {
@@ -179,23 +179,23 @@ bool audio_dma_playback_has_space(size_t min_bytes) {
 // --- Codec initialization ---
 
 bool audio_codec_es8311_init(void) {
-#ifdef BOARD_AIPI_LITE
-    Wire.begin(ES8311_I2C_SDA, ES8311_I2C_SCL);
+#if defined(BOARD_AIPI_LITE) || defined(BOARD_WAVESHARE_AMOLED)
+    Wire.begin(15, 14);  // I2C SDA, SCL (shared with touch on Waveshare)
     
     // Read chip ID
     uint8_t chip_id = 0;
     Wire.beginTransmission(ES8311_I2C_ADDR);
     Wire.write(0xFD);  // Chip reset / ID register
     if (Wire.endTransmission(false) != 0) {
-        Serial.println("[codec] ES8311 not found on I2C address 0x18");
+        Serial1.println("[codec] ES8311 not found on I2C address 0x18");
         return false;
     }
     if (Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)1) != 1) {
-        Serial.println("[codec] ES8311 read ID failed");
+        Serial1.println("[codec] ES8311 read ID failed");
         return false;
     }
     chip_id = Wire.read();
-    Serial.printf("[codec] ES8311 chip ID: 0x%02X\n", chip_id);
+    Serial1.printf("[codec] ES8311 chip ID: 0x%02X\n", chip_id);
     
     // Software reset
     Wire.beginTransmission(ES8311_I2C_ADDR);
@@ -292,7 +292,7 @@ bool audio_codec_es8311_init(void) {
     Wire.write(0x01);  // Power up (bit 0)
     Wire.endTransmission();
     
-    Serial.println("[codec] ES8311 codec initialized successfully");
+    Serial1.println("[codec] ES8311 codec initialized successfully");
     return true;
 
 #else

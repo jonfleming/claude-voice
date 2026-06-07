@@ -57,6 +57,50 @@
 
 #define TOUCH_CS                  -1
 
+#elif defined(BOARD_WAVESHARE_AMOLED)
+
+// --- Waveshare ESP32-S3-Touch-AMOLED-1.8 pin profile ---
+
+// Display (SH8601 QSPI AMOLED, 368x448)
+#define LCD_SDIO0          4
+#define LCD_SDIO1          5
+#define LCD_SDIO2          6
+#define LCD_SDIO3          7
+#define LCD_SCLK          11
+#define LCD_CS            12
+#define LCD_WIDTH         368
+#define LCD_HEIGHT        448
+
+// Touch (FT3168 via I2C)
+#define TOUCH_I2C_SDA     15
+#define TOUCH_I2C_SCL     14
+#define TOUCH_INT         21
+
+// Audio (ES8311 codec)
+#define ES8311_I2C_ADDR         0x18
+#define AUDIO_I2S_MCK     16
+#define AUDIO_I2S_BCK      9
+#define AUDIO_I2S_DI       8  // MIC input
+#define AUDIO_I2S_WS      45
+#define AUDIO_I2S_DO      10  // SPK output
+#define AUDIO_PA_PIN      46
+
+// SD Card (SDMMC)
+#define SDMMC_CLK          2
+#define SDMMC_CMD          1
+#define SDMMC_DATA         3
+
+// Power management (AXP2101 via I2C)
+#define AXP2101_I2C_ADDR  0x34
+
+// Audio output aliases (for compatibility with common pipeline code)
+#define AUDIO_OUTPUT_BCLK  AUDIO_I2S_BCK
+#define AUDIO_OUTPUT_LRC   AUDIO_I2S_WS
+#define AUDIO_OUTPUT_DOUT  AUDIO_I2S_DO
+
+// Button (GPIO0 = boot button on Waveshare AMOLED 1.8)
+#define BUTTON_PIN  0
+
 #else
 
 // --- Freenove ESP32-S3 Media Kit pin profile ---
@@ -77,6 +121,6 @@
 
 #define TOUCH_CS                  -1
 
-#endif  // BOARD_AIPI_LITE
+#endif  // BOARD_WAVESHARE_AMOLED / BOARD_AIPI_LITE
 
 #endif  // BOARD_PINS_H

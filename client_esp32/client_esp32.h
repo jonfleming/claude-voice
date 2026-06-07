@@ -1,5 +1,4 @@
 void request_showBootInstructions(const char *text);
-void request_showBootInstructions(const char *text);
 void request_hideBootInstructions();
 void request_clear_lines();
 void request_display_line1(const char *text);

@@ -1,4 +1,3 @@
-#include <TFT_eSPI.h>
 #include <SPI.h>
 
 #include "display.h"
@@ -8,29 +7,43 @@
 #endif
 
 #ifndef DISPLAY_DEBUG_SERIAL
-#define DISPLAY_DEBUG_SERIAL Serial
+#define DISPLAY_DEBUG_SERIAL Serial1
 #endif
 
 lv_indev_t *indev_keypad; // External declaration of the keypad input device
 
-// Define screen dimensions
-#ifdef FNK0102A_1P14_135x240_ST7789
+// =============================================================================
+// Screen dimensions per board
+// =============================================================================
+#ifdef BOARD_WAVESHARE_AMOLED
+static const uint16_t screenWidth = LCD_WIDTH;   // 368
+static const uint16_t screenHeight = LCD_HEIGHT;  // 448
+#elif defined(FNK0102A_1P14_135x240_ST7789)
 static const uint16_t screenWidth = 135;
 static const uint16_t screenHeight = 240;
-#elif defined AIPI_LITE_128x128_ST7735
+#elif defined(AIPI_LITE_128x128_ST7735)
 static const uint16_t screenWidth = 128;
 static const uint16_t screenHeight = 128;
-#else // Default FNK0102B_3P5_320x480_ST7796
+#else // Default Freenove ST7796
 static const uint16_t screenWidth = 320;
 static const uint16_t screenHeight = 480;
 #endif
 
-// Buffer for drawing
-static lv_disp_draw_buf_t draw_buf;
+// LVGL draw buffer (LVGL 9.x uses uint8_t buffers)
+static lv_draw_buf_t draw_buf;
 static lv_color_t buf[screenWidth * screenHeight / 5];
 
-// TFT instance
+// =============================================================================
+// Board-specific display driver instances
+// =============================================================================
+#ifdef BOARD_WAVESHARE_AMOLED
+// Waveshare: QSPI AMOLED via Arduino_GFX
+static Arduino_ESP32QSPI* s_gfx_bus = nullptr;
+static Arduino_SH8601* s_gfx = nullptr;
+#else
+// Freenove / AIPI-Lite: TFT_eSPI
 TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight);
+#endif
 
 // Display instance
 Display display;
@@ -96,99 +109,153 @@ void layout_display_labels(Display &display_instance)
 /* Serial debugging */
 void my_print(const char *buf)
 {
-  DISPLAY_DEBUG_SERIAL.printf(buf); // Print the buffer to the serial monitor
-  DISPLAY_DEBUG_SERIAL.flush();     // Ensure all data is sent
+  DISPLAY_DEBUG_SERIAL.printf(buf);
+  DISPLAY_DEBUG_SERIAL.flush();
 }
 #endif
 
-// Display flush function
-void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
-{
-  uint32_t w = (area->x2 - area->x1 + 1); // Calculate width of the area to flush
-  uint32_t h = (area->y2 - area->y1 + 1); // Calculate height of the area to flush
+// =============================================================================
+// LVGL 9.x flush callback — board-specific implementations
+// =============================================================================
 
-  tft.startWrite();                                        // Start writing to the TFT
-  tft.setAddrWindow(area->x1, area->y1, w, h);             // Set the address window for writing
-  tft.pushColors((uint16_t *)&color_p->full, w * h, true); // Push colors to the TFT
-  tft.endWrite();                                          // End writing to the TFT
-  lv_disp_flush_ready(disp);                               // Inform LVGL that flushing is complete
+#ifdef BOARD_WAVESHARE_AMOLED
+
+// Waveshare QSPI AMOLED flush using Arduino_SH8601
+void my_disp_flush(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)
+{
+  uint32_t w = (area->x2 - area->x1 + 1);
+  uint32_t h = (area->y2 - area->y1 + 1);
+
+  // SH8601 writeRect: set address window and write pixel data in one call
+  s_gfx->startWrite();
+  s_gfx->writeAddrWindow(area->x1, area->y1, w, h);
+  s_gfx->writePixels((uint16_t *)px_map, w * h);
+  s_gfx->endWrite();
+
+  lv_display_flush_ready(disp);
 }
 
-// Keypad read function
-#ifndef BOARD_AIPI_LITE
-void my_keypad_read(lv_indev_drv_t *drv, lv_indev_data_t *data)
+#else
+
+// Freenove / AIPI-Lite flush using TFT_eSPI
+void my_disp_flush(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)
 {
-  static int last_key = 0; // Static variable to store the last key value
+  uint32_t w = (area->x2 - area->x1 + 1);
+  uint32_t h = (area->y2 - area->y1 + 1);
 
-  button.key_scan();                           // Scan the button state
-  int buttonState = button.get_button_state(); // Get the current button state
-  int act_key = button.get_button_key_value(); // Get the current button key value
+  tft.startWrite();
+  tft.setAddrWindow(area->x1, area->y1, w, h);
+  tft.pushColors((uint16_t *)px_map, w * h, true);
+  tft.endWrite();
+  lv_display_flush_ready(disp);
+}
 
-  // Update the state based on the button state
+#endif
+
+// Keypad read function (LVGL 9.x API)
+#ifndef BOARD_AIPI_LITE
+void my_keypad_read(lv_indev_t * indev, lv_indev_data_t * data)
+{
+  static int last_key = 0;
+
+  button.key_scan();
+  int buttonState = button.get_button_state();
+  int act_key = button.get_button_key_value();
+
   switch (buttonState)
   {
   case Button::KEY_STATE_PRESSED:
-    data->state = LV_INDEV_STATE_PR; // Button is pressed
+    data->state = LV_INDEV_STATE_PRESSED;
     break;
   case Button::KEY_STATE_RELEASED:
-    data->state = LV_INDEV_STATE_REL; // Button is released
+    data->state = LV_INDEV_STATE_RELEASED;
     break;
   }
 
-  // Map button key values to LVGL key codes
   switch (act_key)
   {
   case 1:
-    act_key = LV_KEY_ENTER; // Map to Enter key
+    act_key = LV_KEY_ENTER;
     break;
   case 2:
-    if (display.getTftShowDirection() == 0)
-      act_key = LV_KEY_PREV;
-    else if (display.getTftShowDirection() == 1)
-      act_key = LV_KEY_LEFT;
-    else if (display.getTftShowDirection() == 2)
-      act_key = LV_KEY_NEXT;
-    else if (display.getTftShowDirection() == 3)
-      act_key = LV_KEY_RIGHT;
+    if (display.getTftShowDirection() == 0) act_key = LV_KEY_PREV;
+    else if (display.getTftShowDirection() == 1) act_key = LV_KEY_LEFT;
+    else if (display.getTftShowDirection() == 2) act_key = LV_KEY_NEXT;
+    else if (display.getTftShowDirection() == 3) act_key = LV_KEY_RIGHT;
     break;
   case 3:
-    if (display.getTftShowDirection() == 0)
-      act_key = LV_KEY_NEXT;
-    else if (display.getTftShowDirection() == 1)
-      act_key = LV_KEY_RIGHT;
-    else if (display.getTftShowDirection() == 2)
-      act_key = LV_KEY_PREV;
-    else if (display.getTftShowDirection() == 3)
-      act_key = LV_KEY_LEFT;
+    if (display.getTftShowDirection() == 0) act_key = LV_KEY_NEXT;
+    else if (display.getTftShowDirection() == 1) act_key = LV_KEY_RIGHT;
+    else if (display.getTftShowDirection() == 2) act_key = LV_KEY_PREV;
+    else if (display.getTftShowDirection() == 3) act_key = LV_KEY_LEFT;
     break;
   case 4:
-    if (display.getTftShowDirection() == 0)
-      act_key = LV_KEY_LEFT;
-    else if (display.getTftShowDirection() == 1)
-      act_key = LV_KEY_NEXT;
-    else if (display.getTftShowDirection() == 2)
-      act_key = LV_KEY_RIGHT;
-    else if (display.getTftShowDirection() == 3)
-      act_key = LV_KEY_PREV;
+    if (display.getTftShowDirection() == 0) act_key = LV_KEY_LEFT;
+    else if (display.getTftShowDirection() == 1) act_key = LV_KEY_NEXT;
+    else if (display.getTftShowDirection() == 2) act_key = LV_KEY_RIGHT;
+    else if (display.getTftShowDirection() == 3) act_key = LV_KEY_PREV;
     break;
   case 5:
-    if (display.getTftShowDirection() == 0)
-      act_key = LV_KEY_RIGHT;
-    else if (display.getTftShowDirection() == 1)
-      act_key = LV_KEY_PREV;
-    else if (display.getTftShowDirection() == 2)
-      act_key = LV_KEY_LEFT;
-    else if (display.getTftShowDirection() == 3)
-      act_key = LV_KEY_NEXT;
+    if (display.getTftShowDirection() == 0) act_key = LV_KEY_RIGHT;
+    else if (display.getTftShowDirection() == 1) act_key = LV_KEY_PREV;
+    else if (display.getTftShowDirection() == 2) act_key = LV_KEY_LEFT;
+    else if (display.getTftShowDirection() == 3) act_key = LV_KEY_NEXT;
     break;
   default:
     break;
   }
-  last_key = act_key;   // Update the last key value
-  data->key = last_key; // Set the key value in the input device data
+  last_key = act_key;
+  data->key = last_key;
 }
 #endif
 
+// =============================================================================
+// Board-specific TFT/display initialization
+// =============================================================================
+
+#ifdef BOARD_WAVESHARE_AMOLED
+
+// Initialize Waveshare SH8601 QSPI AMOLED display
+static bool init_waveshare_display() {
+  DISPLAY_DEBUG_SERIAL.println("[display] Initializing SH8601 QSPI AMOLED...");
+
+  // Create QSPI data bus: CS, SCLK, SDIO0-3
+  s_gfx_bus = new Arduino_ESP32QSPI(
+      LCD_CS, LCD_SCLK,
+      LCD_SDIO0, LCD_SDIO1,
+      LCD_SDIO2, LCD_SDIO3
+  );
+
+  // Create SH8601 display driver
+  s_gfx = new Arduino_SH8601(s_gfx_bus, GFX_NOT_DEFINED, 0, LCD_WIDTH, LCD_HEIGHT);
+
+  if (!s_gfx->begin()) {
+    DISPLAY_DEBUG_SERIAL.println("[display] SH8601 begin() FAILED!");
+    return false;
+  }
+
+  // Landscape orientation (rotation 1 = 90 degrees clockwise)
+  s_gfx->setRotation(1);
+
+  // Fill black
+  s_gfx->fillScreen(RGB565_BLACK);
+
+  // Set brightness
+  s_gfx->setBrightness(255);
+
+  DISPLAY_DEBUG_SERIAL.printf("[display] SH8601 initialized: %dx%d, rotation=%d\n",
+      LCD_WIDTH, LCD_HEIGHT, s_gfx->getRotation());
+  return true;
+}
+
+// Backlight reset — Waveshare AMOLED has no traditional backlight
+static void tftRst(void) {
+  log("tftRst", "Waveshare AMOLED: no traditional backlight");
+}
+
+#else
+
+// Backlight reset for Freenove (TFT_BL controlled via GPIO)
 void tftRst(void) {
   log("tftRst", "Backlight reset sequence start");
   String logMsg = "TFT_BL=" + String(TFT_BL);
@@ -203,14 +270,22 @@ void tftRst(void) {
   delay(50);
 }
 
-// Setup the TFT display
+#endif
+
+// Setup the display
 void setupTFT(int direction)
 {
-  log("setupTFT", "Setting up TFT display");
-  tftRst();
-  log("setupTFT", "TFT reset complete");
+  log("setupTFT", "Setting up display");
   display.setTftShowDirection(direction);
   log("setupTFT", "tft_show_direction set");
+
+#ifdef BOARD_WAVESHARE_AMOLED
+  if (!init_waveshare_display()) {
+    DISPLAY_DEBUG_SERIAL.println("[display] Waveshare display init FAILED!");
+  }
+#else
+  tftRst();
+  log("setupTFT", "TFT reset complete");
 
 #ifdef AIPI_LITE_128x128_ST7735
   // TFT_eSPI initializes the selected ESP32-S3 SPI port for the AIPI ST7735.
@@ -222,57 +297,43 @@ void setupTFT(int direction)
   log("setupTFT", "SPI.begin complete");
 #endif
 
-  tft.begin();                                    // Initialize the TFT
+  tft.begin();
   log("setupTFT", "TFT initialization complete");
-  tft.setRotation(display.getTftShowDirection()); // Set the rotation of the TFT using the tft_show_dirction macro
+  tft.setRotation(display.getTftShowDirection());
   log("setupTFT", "TFT rotation set");
+#endif
 }
 
-// Setup LVGL
+// Setup LVGL 9.x
 void setupLVGL()
 {
 #if LV_USE_LOG != 0
-  lv_log_register_print_cb(my_print); // Register the print function for debugging
+  lv_log_register_print_cb(my_print);
 #endif
-  lv_init(); // Initialize LVGL
+  lv_init();
 
-  // Initialize the display buffer
-  lv_disp_draw_buf_init(&draw_buf, buf, NULL, screenWidth * screenHeight / 5);
+  // Create display with landscape orientation (hor=screenHeight, ver=screenWidth)
+  lv_display_t *disp = lv_display_create(screenHeight, screenWidth);
+  lv_display_set_default(disp);
 
-  // Initialize the display driver
-  static lv_disp_drv_t disp_drv;
-  lv_disp_drv_init(&disp_drv);
+  // Set color format to RGB565 (AMOLED displays use 16-bit color)
+  lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
 
-  // Set the resolution based on the TFT direction
-  switch (display.getTftShowDirection())
-  {
-  case 0: // Normal orientation
-  case 2: // 180 degree rotation
-    disp_drv.hor_res = screenWidth;
-    disp_drv.ver_res = screenHeight;
-    break;
-  case 1: // 90 degree rotation
-  case 3: // 270 degree rotation
-    disp_drv.hor_res = screenHeight;
-    disp_drv.ver_res = screenWidth;
-    break;
-  default:
-    disp_drv.hor_res = screenWidth;
-    disp_drv.ver_res = screenHeight;
-    break;
-  }
+  // Set the draw buffer
+  lv_display_set_buffers(disp, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-  disp_drv.flush_cb = my_disp_flush; // Set the flush callback
-  disp_drv.draw_buf = &draw_buf;     // Set the draw buffer
-  lv_disp_drv_register(&disp_drv);   // Register the display driver
+  // Set the flush callback
+  lv_display_set_flush_cb(disp, my_disp_flush);
 
-  // Initialize the input device driver
+  // Set rotation (Waveshare is already in landscape via setRotation(1))
+  lv_display_set_rotation(disp, (lv_display_rotation_t)display.getTftShowDirection());
+
+  // Initialize the input device driver (keypad)
 #ifndef BOARD_AIPI_LITE
-  static lv_indev_drv_t indev_drv;
-  lv_indev_drv_init(&indev_drv);
-  indev_drv.type = LV_INDEV_TYPE_KEYPAD;            // Set the input device type to keypad
-  indev_drv.read_cb = my_keypad_read;               // Set the read callback
-  indev_keypad = lv_indev_drv_register(&indev_drv); // Register the input device driver
+  lv_indev_t *indev = lv_indev_create();
+  lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
+  lv_indev_set_read_cb(indev, my_keypad_read);
+  indev_keypad = indev;
 #else
   indev_keypad = nullptr;
 #endif
@@ -281,16 +342,13 @@ void setupLVGL()
 // Initialize the display
 void Display::init(int screenDir)
 {
-  setupTFT(screenDir); // Setup the TFT display
-  setupLVGL();         // Setup LVGL
+  setupTFT(screenDir);
+  setupLVGL();
 }
 
 // Create a small instruction label at the top of the screen.
-// Uses LVGL so the label is part of LV's object tree and will persist
-// until you remove or hide it. Call after `Display::init()`.
 void Display::showBootInstructions(const char* text)
 {
-  // If a boot label already exists, update text and make sure it's visible
   log("boot_label", text);
   if (boot_label) {
     lv_label_set_text(boot_label, text);
@@ -299,7 +357,6 @@ void Display::showBootInstructions(const char* text)
     return;
   }
 
-  // Create a label on the active screen and save the pointer
   lv_obj_t *active_screen = lv_scr_act();
   if (!active_screen) {
     log("boot_label", "LVGL active screen is null");
@@ -326,14 +383,12 @@ void Display::displayLine1(const char* text)
 {
   log("line1_label", text);
 
-  // Remove existing transcription if present
   if (line1_label) {
     lv_label_set_text(line1_label, text);
     layout_display_labels(*this);
     return;
   }
 
-  // Create label, enable wrapping, and position below the boot label (or near top)
   lv_obj_t *active_screen = lv_scr_act();
   if (!active_screen) {
     log("line1_label", "LVGL active screen is null");
@@ -349,14 +404,12 @@ void Display::displayLine1(const char* text)
 void Display::displayLine2(const char* text)
 {
   log("line2_label", text);
-  // Remove existing transcription if present
   if (line2_label) {
     lv_label_set_text(line2_label, text);
     layout_display_labels(*this);
     return;
   }
 
-  // Create label, enable wrapping, and position below line1_label (or near top)
   lv_obj_t *active_screen = lv_scr_act();
   if (!active_screen) {
     log("line2_label", "LVGL active screen is null");
@@ -401,5 +454,5 @@ void Display::routine(void)
     last_tick_ms = now_ms;
   }
 
-  lv_task_handler(); // Handle LVGL tasks
+  lv_task_handler();
 }

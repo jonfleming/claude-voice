@@ -38,6 +38,10 @@ size_t audio_output_ring_buffer_available_samples(void);
 // Check playback ring buffer free space (in int16_t samples)
 size_t audio_output_ring_buffer_free_samples(void);
 
+// Drain (read) samples from playback ring buffer.
+// Returns number of int16_t samples actually read (may be < count if empty).
+size_t audio_output_ring_buffer_drain(int16_t *dst, size_t count);
+
 // --- Legacy API (backward compatible) ---
 
 int audio_output_init(int bclk, int lrc, int dout);

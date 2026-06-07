@@ -16,6 +16,7 @@
 #include "audio_ring_buffer.h"
 #include "board_pins.h"
 #include "Arduino.h"
+#include <Wire.h>
 
 // =============================================================================
 // Extern references to driver_audio_output.cpp globals
@@ -36,15 +37,15 @@ static pipeline_health_t s_health = {0, 0, 0, 0, PIPELINE_ERR_NONE};
 // =============================================================================
 
 bool audio_pipeline_init(const char *board_profile) {
-    Serial.println("[pipeline] Initializing audio pipeline...");
+    Serial1.println("[pipeline] Initializing audio pipeline...");
     
     // Initialize capture ring buffer
     audio_input_ring_buffer_init();
-    Serial.println("[pipeline] Capture ring buffer initialized");
+    Serial1.println("[pipeline] Capture ring buffer initialized");
     
     // Initialize playback ring buffer
     audio_output_ring_buffer_init();
-    Serial.println("[pipeline] Playback ring buffer initialized");
+    Serial1.println("[pipeline] Playback ring buffer initialized");
     
     // Initialize I2S capture
 #ifdef BOARD_AIPI_LITE
@@ -59,26 +60,34 @@ bool audio_pipeline_init(const char *board_profile) {
     // Initialize I2S playback
 #ifdef BOARD_AIPI_LITE
     if (!audio_output_codec_init()) {
-        Serial.println("[pipeline] ERROR: ES8311 codec init failed");
+        Serial1.println("[pipeline] ERROR: ES8311 codec init failed");
         s_health.last_error_code = PIPELINE_ERR_CODEC_INIT;
         return false;
     }
     i2s_output_init_mclk(AUDIO_OUTPUT_MCLK, AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT);
 #elif defined(BOARD_WAVESHARE_AMOLED)
-    // Waveshare ES8311 init: codec + I2S output
+    // Waveshare ES8311 init: codec + I2S output at 16kHz/16-bit
     // ES8311 I2C address is 0x18 on Waveshare board
-    Wire.begin(AUDIO_I2S_MCK, AUDIO_I2S_BCK);  // Use MCK pin as SDA, BCK as SCL for I2C
-    // Actually use standard I2C pins for Waveshare — check board_pins.h
-    // Waveshare shares I2C bus: SDA=GPIO15, SCL=GPIO14 (same as touch)
+    // I2C bus shared with touch controller: SDA=GPIO15, SCL=GPIO14
     Wire.begin(15, 14);
     if (!audio_output_codec_init()) {
-        Serial.println("[pipeline] ERROR: ES8311 codec init failed");
+        Serial1.println("[pipeline] ERROR: ES8311 codec init failed");
         s_health.last_error_code = PIPELINE_ERR_CODEC_INIT;
         return false;
     }
+    // Enable power amplifier (GPIO46, active HIGH)
     pinMode(AUDIO_PA_PIN, OUTPUT);
     digitalWrite(AUDIO_PA_PIN, HIGH);
-    i2s_output_init(AUDIO_I2S_BCK, AUDIO_I2S_WS, AUDIO_I2S_DO);
+    // Initialize I2S at 16kHz, 16-bit, stereo (ES8311 standard)
+    i2s_output.setPins(AUDIO_I2S_BCK, AUDIO_I2S_WS, AUDIO_I2S_DO, -1, AUDIO_I2S_MCK);
+    if (!i2s_output.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_16BIT,
+                           I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_LEFT)) {
+        Serial1.println("[pipeline] ERROR: I2S playback init failed");
+        s_health.last_error_code = PIPELINE_ERR_I2S_INIT;
+        return false;
+    }
+    s_bits_per_sample = 16;
+    s_channels = 2;
 #else
     i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT);
 #endif
@@ -87,7 +96,7 @@ bool audio_pipeline_init(const char *board_profile) {
     audio_output_set_volume(10);  // ~half volume
     
     s_pipeline_state = PIPELINE_IDLE;
-    Serial.println("[pipeline] Audio pipeline initialized successfully");
+    Serial1.println("[pipeline] Audio pipeline initialized successfully");
     return true;
 }
 
@@ -104,14 +113,14 @@ bool audio_pipeline_capture_start(void) {
 #endif
     
     s_pipeline_state = (s_pipeline_state == PIPELINE_PLAYING) ? PIPELINE_ACTIVE : PIPELINE_CAPTURING;
-    Serial.println("[pipeline] Capture started");
+    Serial1.println("[pipeline] Capture started");
     return true;
 }
 
 void audio_pipeline_capture_stop(void) {
     audio_input_deinit();
     s_pipeline_state = (s_pipeline_state == PIPELINE_ACTIVE) ? PIPELINE_PLAYING : PIPELINE_IDLE;
-    Serial.println("[pipeline] Capture stopped");
+    Serial1.println("[pipeline] Capture stopped");
 }
 
 size_t audio_pipeline_capture_drain(int16_t *mono_output, size_t max_samples, size_t *bytes_written) {
@@ -161,7 +170,7 @@ bool audio_pipeline_playback_start(void) {
     
     // Reconfigure I2S for playback
     if (!i2s_output_init_mclk(AUDIO_OUTPUT_MCLK, AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
-        Serial.println("[pipeline] ERROR: I2S playback init failed");
+        Serial1.println("[pipeline] ERROR: I2S playback init failed");
         s_health.last_error_code = PIPELINE_ERR_I2S_INIT;
         return false;
     }
@@ -176,7 +185,7 @@ bool audio_pipeline_playback_start(void) {
 #endif
     
     s_pipeline_state = (s_pipeline_state == PIPELINE_CAPTURING) ? PIPELINE_ACTIVE : PIPELINE_PLAYING;
-    Serial.println("[pipeline] Playback started");
+    Serial1.println("[pipeline] Playback started");
     return true;
 }
 
@@ -191,7 +200,7 @@ void audio_pipeline_playback_stop(void) {
     
     i2s_output_stream_end();
     s_pipeline_state = (s_pipeline_state == PIPELINE_ACTIVE) ? PIPELINE_CAPTURING : PIPELINE_IDLE;
-    Serial.println("[pipeline] Playback stopped");
+    Serial1.println("[pipeline] Playback stopped");
 }
 
 size_t audio_pipeline_playback_queue(const int16_t *src, size_t count) {

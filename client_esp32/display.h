@@ -3,17 +3,27 @@
 
 #include "board_pins.h"
 #include "lvgl.h"
-#include "TFT_eSPI.h"
 #include "driver_button.h"
+
+// Board-specific display driver selection
+#ifdef BOARD_WAVESHARE_AMOLED
+#include <Arduino_GFX_Library.h>
+#else
+#include "TFT_eSPI.h"
+#endif
 
 // BUTTON_PIN is defined in board_pins.h. TFT pin macros come from TFT_eSPI.
 #ifdef BOARD_AIPI_LITE
 #define TFT_DIRECTION 3           // AIPI Lite landscape orientation
+#elif defined(BOARD_WAVESHARE_AMOLED)
+#define TFT_DIRECTION 1           // Waveshare landscape orientation
 #else
 #define TFT_DIRECTION 1           // Freenove landscape orientation
 #endif
+
 extern lv_indev_t* indev_keypad;  // External declaration of the keypad input device
-// Class to handle display operations
+
+// Display class handles LVGL integration for all board types
 class Display {
 private:
     int tft_show_dirction;  // Non-static member variable for display direction
