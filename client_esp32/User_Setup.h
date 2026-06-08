@@ -41,8 +41,8 @@
 
 // --- Freenove ESP32-S3 Media Kit: ST7796 320x480 ---
 // Include the Freenove-specific TFT_eSPI setup file for pin definitions,
-// driver selection, and display configuration.
-#include <User_Setups/Setup_Freenove_FNK0102B.h>
+// Freenove uses a modified libraries/TFT_eSPI_Setups/User_Setup_Select.h that 
+// includes /TFT_eSPI_Setups/FNK0102B_3.5_320x480_ST7796.h
 
 #endif  // BOARD_AIPI_LITE
 
