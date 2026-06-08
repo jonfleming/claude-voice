@@ -62,6 +62,12 @@ extern bool touch_is_pressed();
 extern bool i2s_output_init_waveshare();
 extern bool audio_output_codec_init(void);
 
+// SD card driver (SDMMC)
+#include "driver_sd_card.h"
+
+// SD card state (global for access from setup() and loop())
+static bool sd_ok = false;
+
 // Color definitions for 16-bit RGB565
 #define COLOR_BLACK       0x0000
 #define COLOR_WHITE       0xFFFF
@@ -127,7 +133,7 @@ void setup() {
 
     // --- Stage 2: Touch ---
     Serial.println("[stage] 2: Touch init (FT3168 I2C)");
-    bool touch_ok = touch_init_ft3168();
+    touch_ok = touch_init_ft3168();
     if (!touch_ok) {
         Serial.println("[WARN] Touch init failed (continuing without touch).");
     } else {
@@ -145,16 +151,36 @@ void setup() {
     }
     Serial.println();
 
-    // --- Stage 4: Summary ---
+    // --- Stage 4: SD Card ---
+    Serial.println("[stage] 4: SD card init (SDMMC 1-bit)");
+    sd_ok = sd_card_init();
+    if (!sd_ok) {
+        sd_ok = sd_card_init_async();  // Try async init as fallback
+        Serial.printf("[WARN] SD card init (sync+async): %s\r\n",
+            sd_card_state_to_string(sd_card_get_state()));
+    } else {
+        sd_card_info_t info;
+        if (sd_card_get_info(&info)) {
+            Serial.printf("[info] SD card: %s, %dMB, free=%dMB\r\n",
+                info.card_type_str, (uint32_t)info.card_size_mb,
+                (uint32_t)info.free_space_mb);
+        }
+        // Create default directories
+        sd_card_mkdir("/data");
+        sd_card_mkdir("/data/audio");
+        sd_card_mkdir("/data/config");
+    }
+    Serial.println();
+
+    // --- Stage 5: Summary ---
     Serial.println("========================================");
-    // Note: do NOT call display_init_sh8601() again here — it was already
-    // called in Stage 1 and re-initializing the QSPI bus causes
-    // spi_bus_initialize(ESP_ERR_INVALID_STATE) → abort().
     Serial.print("Results: Display=OK");
     Serial.print(" | Touch=");
     Serial.print(touch_ok ? "OK" : "FAIL");
     Serial.print(" | Audio=");
     Serial.print(audio_ok ? "OK" : "FAIL");
+    Serial.print(" | SD=");
+    Serial.print(sd_ok ? "OK" : "FAIL");
     Serial.println(" | Starting loop.");
     Serial.println("========================================");
     Serial.println();
@@ -272,21 +298,37 @@ void loop() {
         // Display subsystem status
         char status_buf[80];
         snprintf(status_buf, sizeof(status_buf),
-            "D:%s T:%s A:%s",
-            "OK", touch_ok ? "OK" : "FAIL", audio_ok ? "OK" : "FAIL");
+            "D:%s T:%s A:%s SD:%s",
+            "OK", touch_ok ? "OK" : "FAIL", audio_ok ? "OK" : "FAIL",
+            sd_ok ? "OK" : "FAIL");
         display_set_text_size(1);
         display_set_text_color(COLOR_LIGHTGRAY);
         display_set_cursor(10, display_height() - 10);
         display_print(status_buf);
 
-        Serial.printf("[update] Pattern %d, Counter: %lu, Touch: %s, Audio: %s\r\n",
+        Serial.printf("[update] Pattern %d, Counter: %lu, Touch: %s, Audio: %s, SD: %s\r\n",
             test_pattern, (unsigned long)counter,
             touch_is_pressed() ? "pressed" : "released",
-            audio_ok ? "OK" : "FAIL");
+            audio_ok ? "OK" : "FAIL",
+            sd_ok ? "OK" : "FAIL");
     }
 
     // Poll touch continuously
     touch_read_ft3168();
+
+    // Check for SD card removal (hot-unplug)
+    if (sd_ok) {
+        sd_card_state_t sd_state = sd_card_get_state();
+        if (sd_state == SD_STATE_REMOVED) {
+            Serial.println("[sdcard] [WARN] Card removed! Attempting remount...");
+            sd_ok = sd_card_try_remount();
+            if (sd_ok) {
+                Serial.println("[sdcard] [OK] Card remounted.");
+            } else {
+                Serial.println("[sdcard] [FAIL] Card not present after removal.");
+            }
+        }
+    }
 
     delay(50);
 }

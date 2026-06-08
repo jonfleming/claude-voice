@@ -35,17 +35,17 @@ static const uint16_t screenWidth = 320;
 static const uint16_t screenHeight = 480;
 #endif
 
-// LVGL draw buffer backing storage (LVGL 8)
+// LVGL 8.x draw buffer backing storage
 static lv_disp_draw_buf_t draw_buf;
-static lv_color_t buf[screenWidth * screenHeight / 5];
+static LV_ATTRIBUTE_MEM_ALIGN uint8_t draw_buf_data[screenWidth * screenHeight / 5 * 2];
 
 // =============================================================================
 // Board-specific display driver instances
 // =============================================================================
 #ifdef BOARD_WAVESHARE_AMOLED
 // Waveshare: QSPI AMOLED via Arduino_GFX
-static Arduino_ESP32QSPI* s_gfx_bus = nullptr;
-static Arduino_SH8601* s_gfx = nullptr;
+static Arduino_ESP32QSPI *s_gfx_bus = nullptr;
+static Arduino_SH8601 *s_gfx = nullptr;
 #else
 // Freenove / AIPI-Lite: TFT_eSPI
 TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight);
@@ -65,7 +65,7 @@ int get_logical_screen_width()
   return lv_disp_get_hor_res(disp);
 }
 
-void log(const char* object, const char* message) {
+void log(const char *object, const char *message) {
   DISPLAY_DEBUG_SERIAL.printf("[display] %s: %s\n", object, message);
 }
 
@@ -160,7 +160,7 @@ void my_disp_flush(lv_disp_drv_t * disp, const lv_area_t * area, lv_color_t * px
 
 // Keypad read function (LVGL 8.x API)
 #ifndef BOARD_AIPI_LITE
-void my_keypad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
+void my_keypad_read(lv_indev_drv_t * indev, lv_indev_data_t * data)
 {
   static int last_key = 0;
 
@@ -168,8 +168,7 @@ void my_keypad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
   int buttonState = button.get_button_state();
   int act_key = button.get_button_key_value();
 
-  switch (buttonState)
-  {
+  switch (buttonState) {
   case Button::KEY_STATE_PRESSED:
     data->state = LV_INDEV_STATE_PRESSED;
     break;
@@ -178,8 +177,7 @@ void my_keypad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
     break;
   }
 
-  switch (act_key)
-  {
+  switch (act_key) {
   case 1:
     act_key = LV_KEY_ENTER;
     break;
@@ -215,9 +213,9 @@ void my_keypad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
 }
 #endif
 
-// Touch read function (LVGL 9.x API) — Waveshare only
+// Touch read function (LVGL 8.x API) — Waveshare only
 #if defined(BOARD_WAVESHARE_AMOLED)
-void my_touchpad_read(lv_indev_t * indev, lv_indev_data_t * data)
+void my_touchpad_read(lv_indev_drv_t * indev, lv_indev_data_t * data)
 {
   if (touch_read()) {
     data->point.x = touch_get_x();
@@ -308,8 +306,6 @@ void setupTFT(int direction)
   log("setupTFT", "TFT reset complete");
 
 #ifdef AIPI_LITE_128x128_ST7735
-  // TFT_eSPI initializes the selected ESP32-S3 SPI port for the AIPI ST7735.
-  // Calling the global SPI object here can hang before the driver gets control.
   log("setupTFT", "SPI.begin skipped for AIPI");
 #else
   // Explicitly initialize SPI pins before TFT_eSPI driver init on ESP32-S3.
@@ -324,7 +320,11 @@ void setupTFT(int direction)
 #endif
 }
 
-// Setup LVGL 8.x
+// =============================================================================
+// LVGL 8.x initialization
+// =============================================================================
+
+// Setup LVGL 8.4.0
 void setupLVGL()
 {
 #if LV_USE_LOG != 0
@@ -332,24 +332,33 @@ void setupLVGL()
 #endif
   lv_init();
 
-  // Initialize draw buffer (buffer size is in pixels for LVGL 8)
-  lv_disp_draw_buf_init(&draw_buf, buf, NULL, screenWidth * screenHeight / 5);
+  // Initialize draw buffer (LVGL 8.x API)
+  lv_disp_draw_buf_init(&draw_buf, draw_buf_data, NULL, screenWidth * screenHeight / 5);
 
-  // Register display driver
-  lv_disp_drv_t disp_drv;
+  // Initialize display driver (LVGL 8.x API)
+  static lv_disp_drv_t disp_drv;
   lv_disp_drv_init(&disp_drv);
-  disp_drv.hor_res = screenHeight;
-  disp_drv.ver_res = screenWidth;
-  disp_drv.flush_cb = my_disp_flush;
+
+  // Set the draw buffer
   disp_drv.draw_buf = &draw_buf;
+
+  // Set the flush callback
+  disp_drv.flush_cb = my_disp_flush;
+
+  // Set color format to RGB565 (default for LVGL 8.x, but explicit for safety)
+  disp_drv.full_refresh = 0;
+  disp_drv.direct_mode = 0;
+
+  // Register the display
   lv_disp_t *disp = lv_disp_drv_register(&disp_drv);
+  lv_disp_set_default(disp);
 
   // Set rotation (Waveshare is already in landscape via setRotation(1))
   lv_disp_set_rotation(disp, (lv_disp_rot_t)display.getTftShowDirection());
 
-  // Initialize the input device driver (keypad)
+  // Initialize the input device driver (keypad) — LVGL 8.x API
 #ifndef BOARD_AIPI_LITE
-  lv_indev_drv_t indev_drv;
+  static lv_indev_drv_t indev_drv;
   lv_indev_drv_init(&indev_drv);
   indev_drv.type = LV_INDEV_TYPE_KEYPAD;
   indev_drv.read_cb = my_keypad_read;
@@ -359,11 +368,12 @@ void setupLVGL()
 #endif
 
 #if defined(BOARD_WAVESHARE_AMOLED)
-  // Register touch input device for Waveshare AMOLED
-  lv_indev_t *touch = lv_indev_create();
-  lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
-  lv_indev_set_read_cb(touch, my_touchpad_read);
-  touch_indev = touch;
+  // Register touch input device for Waveshare AMOLED — LVGL 8.x API
+  static lv_indev_drv_t touch_drv;
+  lv_indev_drv_init(&touch_drv);
+  touch_drv.type = LV_INDEV_TYPE_POINTER;
+  touch_drv.read_cb = my_touchpad_read;
+  touch_indev = lv_indev_drv_register(&touch_drv);
   touch_input_registered = true;
 #endif
 }
@@ -376,7 +386,7 @@ void Display::init(int screenDir)
 }
 
 // Create a small instruction label at the top of the screen.
-void Display::showBootInstructions(const char* text)
+void Display::showBootInstructions(const char *text)
 {
   log("boot_label", text);
   if (boot_label) {
@@ -408,7 +418,7 @@ void Display::hideBootInstructions()
   layout_display_labels(*this);
 }
 
-void Display::displayLine1(const char* text)
+void Display::displayLine1(const char *text)
 {
   log("line1_label", text);
 
@@ -430,7 +440,7 @@ void Display::displayLine1(const char* text)
   layout_display_labels(*this);
 }
 
-void Display::displayLine2(const char* text)
+void Display::displayLine2(const char *text)
 {
   log("line2_label", text);
   if (line2_label) {

@@ -2,6 +2,7 @@
 #define __DRIVER_POWER_H
 
 #include <Arduino.h>
+#include <Wire.h>
 
 // AXP2101 I2C register addresses
 #define AXP2101_REG_STATUS1       0x00
@@ -22,13 +23,15 @@
 #define AXP2101_REG_DCDC_OVP_UVP  0x23
 #define AXP2101_REG_DCDC1_V       0x24
 #define AXP2101_REG_DCDC2_V       0x25
-#define AXP2101_REG_DCDC3_V       0x26
-#define AXP2101_REG_DCDC4_V       0x27
-#define AXP2101_REG_DCDC5_V       0x28
-#define AXP2101_REG_DCDC1_EN      0x92
-#define AXP2101_REG_DCDC2_EN      0x93
-#define AXP2101_REG_DCDC3_EN      0x94
-#define AXP2101_REG_DCDC4_EN      0x95
+#define AXP2101_REG_SLEEP_CTL     0x26
+#define AXP2101_REG_DCDC3_V       0x29
+#define AXP2101_REG_DCDC4_V       0x2A
+#define AXP2101_REG_DCDC5_V       0x2B
+#define AXP2101_REG_DCDC1_EN      0x37
+#define AXP2101_REG_DCDC2_EN      0x38
+#define AXP2101_REG_DCDC3_EN      0x39
+#define AXP2101_REG_DCDC4_EN      0x3A
+#define AXP2101_REG_DCDC5_EN      0x3B
 #define AXP2101_REG_LDO1_EN       0x96
 #define AXP2101_REG_LDO2_EN       0x97
 #define AXP2101_REG_LDO3_EN       0x98

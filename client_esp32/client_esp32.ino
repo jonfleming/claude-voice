@@ -29,6 +29,9 @@
 // Display
 #include "display.h"
 #include "driver_touch.h"
+#include "driver_power.h"
+#include "driver_sd_card.h"
+#include <SD_MMC.h>
 #include <lvgl.h>
 #include <freertos/semphr.h>
 #include <math.h>
@@ -59,6 +62,20 @@ SemaphoreHandle_t display_mutex = NULL;
 SemaphoreHandle_t ws_mutex = NULL;
 
 #define RECORDER_FOLDER ""
+
+// SD card recording folder (Waveshare only)
+#if defined(BOARD_WAVESHARE_AMOLED)
+#define SD_RECORDER_FOLDER "/recordings"
+#endif
+
+// Power monitoring
+#if defined(BOARD_WAVESHARE_AMOLED)
+static unsigned long last_power_check_ms = 0;
+static int last_battery_pct = -1;
+static bool last_charging = false;
+static bool last_vbus = false;
+static bool power_init_done = false;
+#endif
 
 // Board-profile pin macros are defined in board_pins.h
 // (uncomment BOARD_AIPI_LITE to switch from Freenove to AIPI Lite)
@@ -672,6 +689,40 @@ void setup() {
   } else {
     APP_SERIAL.println("[Setup] FT3168 touch init FAILED — falling back to button-only input");
   }
+
+  // Power management (AXP2101)
+  APP_SERIAL.println("[Setup] Initializing AXP2101 power manager...");
+  if (power.init()) {
+    power_init_done = true;
+    APP_SERIAL.println("[Setup] AXP2101 power manager initialized");
+
+    // Configure charging current and low-battery threshold
+    power.set_charge_current(CHG_CUR_400MA);
+    power.set_low_battery_threshold(LOW_BAT_2800MV);
+
+    // Read initial power state
+    int bat_pct = power.read_battery_percent();
+    int bat_vol = power.read_battery_voltage();
+    if (bat_pct >= 0) APP_SERIAL.printf("[Setup] Battery: %d%%\n", bat_pct);
+    if (bat_vol >= 0) APP_SERIAL.printf("[Setup] Battery voltage: %d mV\n", bat_vol);
+    if (power.is_vbus_present()) APP_SERIAL.println("[Setup] VBUS (USB) detected");
+    else APP_SERIAL.println("[Setup] No VBUS detected");
+  } else {
+    APP_SERIAL.println("[Setup] AXP2101 init FAILED — running on default power");
+  }
+
+  // SD card (Waveshare only)
+  APP_SERIAL.println("[Setup] Initializing SD card...");
+  if (sd_card_init()) {
+    APP_SERIAL.println("[Setup] SD card initialized successfully");
+    // Create recording directory
+    if (!SD_MMC.exists(SD_RECORDER_FOLDER)) {
+      SD_MMC.mkdir(SD_RECORDER_FOLDER);
+      APP_SERIAL.printf("[Setup] Created directory: %s\n", SD_RECORDER_FOLDER);
+    }
+  } else {
+    APP_SERIAL.println("[Setup] SD card init FAILED — no local recording available");
+  }
 #endif
 
   // Initialize the I2S bus for audio input
@@ -997,7 +1048,20 @@ void loop() {
     if (display_mutex) xSemaphoreGive(display_mutex);
     display.clearLines();
   }
-  display.routine(); 
+  display.routine();
+
+  // Periodic power monitoring (every 10s)
+  if (power_init_done && (millis() - last_power_check_ms >= 10000)) {
+    last_power_check_ms = millis();
+    int bat_pct = power.read_battery_percent();
+    int bat_vol = power.read_battery_voltage();
+    if (bat_pct >= 0 && bat_pct <= 100) {
+      DBG_PRINTF("[Power] Battery: %d%% (%d mV)\n", bat_pct, bat_vol);
+    }
+    if (power.is_vbus_present()) {
+      DBG_PRINTLN("[Power] VBUS connected");
+    }
+  }
 
   // Keep UI/state in response mode until backend confirms all audio is done.
   if (resume_recorder_after_response && !button_abort && conversation_active) {

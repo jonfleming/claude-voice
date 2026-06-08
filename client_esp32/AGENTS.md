@@ -14,25 +14,41 @@ This guide is for agentic coding agents contributing to this ESP32 Arduino proje
 
 ### Board Selection
 
-The project supports two hardware boards via compile-time selection:
+The project supports three hardware boards via compile-time selection:
 
 | Board | Define | Notes |
 |-------|--------|-------|
 | **Freenove** (default) | *(none)* | FNK0102A/B, parallel TFT, external I2S mic |
 | **AIPI Lite** | `BOARD_AIPI_LITE` | ST7735 SPI display, ES8311 I2S codec, battery powered |
+| **Waveshare AMOLED** | `BOARD_WAVESHARE_AMOLED` | SH8601 QSPI AMOLED 368x448, FT3168 touch, AXP2101 PMU, SDMMC |
 
 **To build for AIPI Lite:**
 ```sh
-arduino-cli compile --fqbn esp32:esp32:esp32s3 --build-property "compiler.c.extra_flags=-DBOARD_AIPI_LITE" --build-property "compiler.cpp.extra_flags=-DBOARD_AIPI_LITE" voice_assistant_esp32.ino
+arduino-cli compile --fqbn esp32:esp32:esp32s3 --build-property "compiler.c.extra_flags=-DBOARD_AIPI_LITE" --build-property "compiler.cpp.extra_flags=-DBOARD_AIPI_LITE" client_esp32.ino
 ```
 
-Or uncomment `#define BOARD_AIPI_LITE` in `board_pins.h`.
+**To build for Waveshare AMOLED:**
+```sh
+arduino-cli compile --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi,CDCOnBoot=cdc,USBMode=hwcdc,UploadSpeed=115200" --build-property "compiler.c.extra_flags=-DBOARD_WAVESHARE_AMOLED" --build-property "compiler.cpp.extra_flags=-DBOARD_WAVESHARE_AMOLED" client_esp32.ino
+```
+
+**Note:** Waveshare AMOLED build requires the `app3M_fat9M_16MB` partition scheme (3MB app space) because the sketch exceeds the default 1.2MB limit. The partition scheme is set in `arduino.json` and must match the FQBN.
 
 **Key differences:**
 - AIPI-Lite requires GPIO10 HIGH on boot (power keep-alive)
 - AIPI-Lite uses SPI display (ST7735) vs Freenove's parallel TFT
 - AIPI-Lite has ES8311 I2S codec (needs MCLK) vs Freenove's external I2S mic
 - AIPI-Lite has speaker amp enable (GPIO9) that must be asserted before playback
+
+**Waveshare AMOLED specifics:**
+- SH8601 QSPI AMOLED display (368x448) via Arduino_GFX (Arduino_SH8601 driver)
+- FT3168 capacitive touch at I2C 0x5D (SDA=GPIO15, SCL=GPIO14)
+- AXP2101 PMU at I2C 0x34 for battery monitoring and power management
+- SDMMC 1-bit mode (CLK=GPIO2, CMD=GPIO1, DATA=GPIO3)
+- ES8311 I2S codec (MCK=GPIO16, BCK=GPIO9, DIN=GPIO8, WS=GPIO45, DO=GPIO10)
+- Speaker amp on GPIO46
+- Single boot button on GPIO0
+- Requires `app3M_fat9M_16MB` partition scheme (3MB app space)
 
 ### Build firmware
 - **Compile for ESP32-S3:**
