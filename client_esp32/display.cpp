@@ -389,7 +389,11 @@ void setupLVGL()
 // Initialize the display
 void Display::init(int screenDir)
 {
-  log("display", "Initializing display");
+#ifdef BOARD_AIPI_LITE
+  log("display", "Initializing display for AIPI");
+#else
+  log("display", "Initializing display for Freenove");
+#endif
   setupTFT(screenDir);
   log("display", "Initializing LVGL");
   setupLVGL();
