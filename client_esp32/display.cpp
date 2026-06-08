@@ -7,8 +7,16 @@
 #define BUTTON_PIN 19   // Freenove default; overridden by board_pins.h for other boards
 #endif
 
+#ifndef APP_SERIAL
+#ifdef BOARD_AIPI_LITE
+#define APP_SERIAL Serial
+#else
+#define APP_SERIAL Serial0
+#endif
+#endif
+
 #ifndef DISPLAY_DEBUG_SERIAL
-#define DISPLAY_DEBUG_SERIAL Serial1
+#define DISPLAY_DEBUG_SERIAL APP_SERIAL
 #endif
 
 lv_indev_t *indev_keypad; // External declaration of the keypad input device
