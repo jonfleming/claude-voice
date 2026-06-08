@@ -477,7 +477,12 @@ DriverPower power(Wire, AXP2101_I2C_ADDR);
 
 #else  // BOARD_WAVESHARE_AMOLED
 
-// Stub for non-Waveshare boards
+// Stub for non-Waveshare boards (no AXP2101 PMU)
+
+// Stub constructor — no real I2C communication
+DriverPower::DriverPower(TwoWire &wire, uint8_t addr) : _wire(&wire), _addr(addr) {}
+
+// Global stub instance
 DriverPower power(Wire, 0x34);
 
 bool DriverPower::init() { return false; }

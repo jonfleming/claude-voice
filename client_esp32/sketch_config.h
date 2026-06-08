@@ -7,7 +7,7 @@
 // Default: Freenove ESP32-S3 Media Kit (ST7796 parallel TFT)
 
 // #define BOARD_AIPI_LITE
-#define BOARD_WAVESHARE_AMOLED
+// #define BOARD_WAVESHARE_AMOLED
 
 #ifndef ARDUINO_USB_CDC_ON_BOOT
 #define ARDUINO_USB_CDC_ON_BOOT 1

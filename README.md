@@ -112,6 +112,7 @@ A standalone hardware client located in `client_esp32/`.
 - **Display**: Real-time status ("Transcribing...", "Speaking...") and transcript display.
 - **Button Behavior**: If the button is pressed while listening or playing audio, the client performs a hard stop, returns to boot state (`Press button to start a conversation.`), and ignores stale in-flight backend audio/messages until the next explicit start press.
 - **Volume Control**: Software-based volume scaling for DACs without hardware controls.
+- **Supported Boards**: See [Hardware Comparison](#hardware-comparison) below. Full setup details in [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md#4-supported-hardware-boards).
 - **Setup**: 
   - Open `client_esp32/client_esp32.ino` in Arduino IDE.
   - Install `ArduinoWebsockets` library.

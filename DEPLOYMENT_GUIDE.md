@@ -158,6 +158,17 @@ Then set the following under **Tools**:
 | Upload Speed | `921600` |
 | USB Mode | `hwcdc` |
 
+#### Waveshare AMOLED 1.8
+
+In addition to the settings above, change:
+
+| Setting | Value |
+|---------|-------|
+| Flash Size | `16M` |
+| Partition Scheme | `app3M_fat9M_16MB` |
+
+> **Note:** The `app3M_fat9M_16MB` partition scheme is required because the Waveshare sketch exceeds the default 1.2MB app size limit. This reserves 3MB for the app and 9MB for FAT/SPIFFS.
+
 ### Step 5 — Flash
 
 Connect the ESP32 via USB and click **Upload**.
@@ -207,7 +218,7 @@ The sketch supports **three** hardware boards, selected via compile-time define 
 |-------|--------|---------|-------|-------|
 | **Freenove ESP32-S3 Media Kit** (default) | *(none)* | ST7796 320x480 parallel TFT | External I2S mic + I2S DAC | No battery, always powered via USB |
 | **AIPI Lite** | `BOARD_AIPI_LITE` | ST7735 128x128 SPI | ES8311 I2S codec (shared peripheral) | Battery powered, GPIO10 must be HIGH on boot |
-| **Waveshare AMOLED 1.8** | `BOARD_WAVESHARE_AMOLED` | SH8601 368x448 QSPI AMOLED | ES8311 I2S codec + FT3168 touch + AXP2101 PMU | SD card slot, touch input |
+| **Waveshare AMOLED 1.8** | `BOARD_WAVESHARE_AMOLED` | SH8601 368x448 QSPI AMOLED | ES8311 I2S codec + FT3168 touch + AXP2101 PMU | SDMMC card slot, capacitive touch, battery powered |
 
 ### Board-specific notes
 
@@ -233,7 +244,97 @@ The sketch supports **three** hardware boards, selected via compile-time define 
 - Display: SH8601 via QSPI (SDIO0-3 + SCLK + CS)
 - Touch: FT3168 via I2C (SDA=15, SCL=14)
 - Power: AXP2101 PMU via I2C (addr 0x34)
-- SD Card: SDMMC (CLK=2, CMD=1, DATA=3)
+- SD Card: SDMMC 1-bit (CLK=2, CMD=1, DATA=3)
+- Audio: ES8311 I2S codec (MCK=16, BCK=9, DIN=8, WS=45, DO=10)
+- Speaker amp enable: GPIO 46
+
+### GPIO reference: Waveshare AMOLED 1.8
+
+| Function | GPIO | Notes |
+|----------|------|-------|
+| Boot Button | 0 | Single button; also used for DFU mode on boot |
+| Battery ADC | — | Monitored via AXP2101 PMU (I2C 0x34) |
+| Display CS | 12 | QSPI chip select for SH8601 |
+| Display SCLK | 13 | QSPI clock |
+| Display SDIO0 | 11 | QSPI data 0 |
+| Display SDIO1 | 10 | QSPI data 1 |
+| Display SDIO2 | 9 | QSPI data 2 |
+| Display SDIO3 | 8 | QSPI data 3 |
+| Touch SDA | 15 | FT3168 I2C data |
+| Touch SCL | 14 | FT3168 I2C clock |
+| ES8311 I2C SDA | 43 | Codec control |
+| ES8311 I2C SCL | 44 | Codec control |
+| ES8311 MCLK | 16 | Master clock for I2S |
+| ES8311 BCLK | 9 | Bit clock |
+| ES8311 DIN | 8 | Serial data in |
+| ES8311 WS | 45 | Word select |
+| ES8311 DO | 10 | Digital output |
+| Speaker Amp EN | 46 | Assert high before playback |
+| SDMMC CLK | 2 | SD card clock |
+| SDMMC CMD | 1 | SD card command |
+| SDMMC DATA | 3 | SD card data (1-bit) |
+| PSRAM CS | 21 | OPI PSRAM chip select |
+
+### SD Card Configuration (Waveshare)
+
+The Waveshare AMOLED 1.8 includes an SD card slot wired in 1-bit SDMMC mode:
+
+- **CLK**: GPIO 2
+- **CMD**: GPIO 1
+- **DATA**: GPIO 3
+
+To use the SD card in your sketch:
+
+```cpp
+#include "SD.h"
+
+void setup() {
+  if (!SD.begin(1, SPI, 40000000)) {
+    Serial.println("SD card init failed");
+    while (1);
+  }
+  // Use SD.cardType(), SD.cardSize(), etc.
+}
+```
+
+The SD card is useful for storing config files, logs, or cached TTS models.
+
+### AXP2101 Power Management (Waveshare)
+
+The Waveshare AMOLED 1.8 uses the AXP2101 PMU (I2C address 0x34) for battery monitoring and power management. Key capabilities:
+
+- **Battery voltage reading**: `axp2101.getBatteryVoltage()` — returns mV
+- **Battery percentage**: `axp2101.getBatteryPercentage()` — returns 0–100
+- **Charging status**: `axp2101.isCharging()` — returns true when charging
+- **Battery present**: `axp2101.isBatteryConnect()` — returns true if battery attached
+- **Shutdown**: `axp2101.powerOff()` — shuts down the PMU (device powers off)
+
+To use AXP2101 in your sketch:
+
+```cpp
+#include "AXP2101.h"
+
+AXP2101 axp;
+
+void setup() {
+  Wire.begin(15, 14);  // SDA=15, SCL=14 (touch I2C bus)
+  axp.begin();
+  axp.enableBatteryMeasurement();
+}
+
+void loop() {
+  int voltage = axp.getBatteryVoltage();     // mV
+  int percent = axp.getBatteryPercentage();   // 0-100
+  // ...
+}
+```
+
+**Power considerations:**
+- The AXP2101 manages charging from USB and battery discharge
+- When on USB power, the PMU routes power to the ESP32 and charges the battery
+- On battery, the PMU steps the battery voltage up to the ESP32's operating range
+- Battery voltage should be monitored regularly — low voltage causes brownouts
+- The ESP32 cannot be shut down via software without the AXP2101 — it controls the main power rail
 
 ### GPIO reference: AIPI Lite
 
@@ -416,6 +517,42 @@ The mic and speaker share the same I2S peripheral. Before playback:
 4. After playback, call `audio_input_init_mclk(...)` to re-arm the mic
 
 Skipping step 1 leaves the mic driver owning the port — the speaker outputs bus noise instead of audio.
+
+### Waveshare AMOLED won't boot
+
+- Hold the boot button (GPIO 0) while connecting USB, then release after ~2 seconds
+- Verify the partition scheme is `app3M_fat9M_16MB` (not `fatflash`) — the sketch exceeds the default 1.2MB app limit
+- Check that `BOARD_WAVESHARE_AMOLED` is defined in `sketch_config.h`
+- If the device enumerates but no serial output appears, try a different USB cable (some cables are power-only)
+
+### Waveshare AMOLED SD card not detected
+
+- Ensure the SD card is FAT32 formatted (the ESP32 SD_MMC library does not support exFAT)
+- Verify SDMMC wiring: CLK=GPIO2, CMD=GPIO1, DATA=GPIO3
+- Try `SD_MMC.begin(1, true)` (1-bit mode, internal pull-ups enabled)
+- If `SD_MMC.begin()` returns false, check the card is fully seated (the slot can be finicky)
+
+### Waveshare AMOLED touch not responding
+
+- FT3168 I2C address is `0x5D` (SDA=GPIO15, SCL=GPIO14)
+- Verify I2C scan finds address `0x5D`: use an I2C scanner sketch
+- Check that no other driver is sharing the same I2C bus without proper arbitration
+- The touch interrupt line (GPIO21) may need a pull-up resistor if the panel doesn't provide one
+
+### Waveshare AMOLED battery drains quickly
+
+- The AMOLED display draws most power when bright and showing white — use dark themes to save power
+- Call `axp2101.setPowerOutPut(AXP2101_LDO3, AXP2101_OFF)` to disable unused LDOs if applicable
+- Reduce display brightness via `display.setBrightness()` (0–255)
+- Monitor battery voltage via AXP2101: `axp.getBatteryVoltage()` returns mV
+- Brownouts below ~3.3V cause ESP32 resets — implement low-voltage shutdown in your sketch
+
+### Waveshare AMOLED display shows garbled output
+
+- Verify QSPI pins: SDIO0=GPIO11, SDIO1=GPIO10, SDIO2=GPIO9, SDIO3=GPIO8, SCLK=GPIO13, CS=GPIO12
+- Check that the SH8601 driver is initialized before any display calls
+- If using Arduino_GFX, ensure the SH8601 constructor matches your pin mapping
+- QSPI speed should not exceed the panel's rated maximum (typically 40–80 MHz)
 
 ### Display shows garbage or stays blank
 

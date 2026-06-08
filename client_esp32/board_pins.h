@@ -57,6 +57,15 @@
 
 #define TOUCH_CS                  -1
 
+// SD Card (SDMMC) — AIPI Lite has no SDMMC
+#define SDMMC_CLK                -1
+#define SDMMC_CMD                -1
+#define SDMMC_DATA               -1
+
+// Touch I2C — AIPI Lite has no I2C touch
+#define TOUCH_I2C_SDA            -1
+#define TOUCH_I2C_SCL            -1
+
 #elif defined(BOARD_WAVESHARE_AMOLED)
 
 // --- Waveshare ESP32-S3-Touch-AMOLED-1.8 pin profile ---
@@ -105,21 +114,38 @@
 
 // --- Freenove ESP32-S3 Media Kit pin profile ---
 
+// Display (ST7796 320x480 parallel TFT via TFT_eSPI)
 #define DISPLAY_SPI_BL             2
 #define DISPLAY_SPI_RST           20
+#define TFT_WIDTH                 320
+#define TFT_HEIGHT                480
+#define TFT_BL                    DISPLAY_SPI_BL
+#define TFT_BACKLIGHT_ON          HIGH
+#define TFT_INVERSION_ON
+
+// User inputs
 #define BUTTON_PIN                19
 
-// Audio input (I2S)
+// Touch (I2C) — Freenove uses FT6236 or similar capacitive touch
+#define TOUCH_I2C_SDA            8
+#define TOUCH_I2C_SCL            9
+#define TOUCH_INT                -1
+#define TOUCH_CS                 -1
+
+// SD Card (SDMMC 1-bit)
+#define SDMMC_CLK                40
+#define SDMMC_CMD                39
+#define SDMMC_DATA               41
+
+// Audio input (external I2S MEMS microphone)
 #define AUDIO_INPUT_SCK            3
 #define AUDIO_INPUT_WS            14
 #define AUDIO_INPUT_DIN           46
 
 // Audio output (I2S)
 #define AUDIO_OUTPUT_BCLK         42
-#define AUDIO_OUTPUT_LRC          41
+#define AUDIO_OUTPUT_LRC          45
 #define AUDIO_OUTPUT_DOUT          1
-
-#define TOUCH_CS                  -1
 
 #endif  // BOARD_WAVESHARE_AMOLED / BOARD_AIPI_LITE
 

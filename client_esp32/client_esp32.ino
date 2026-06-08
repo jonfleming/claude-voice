@@ -1050,7 +1050,8 @@ void loop() {
   }
   display.routine();
 
-  // Periodic power monitoring (every 10s)
+#if defined(BOARD_WAVESHARE_AMOLED)
+  // Periodic power monitoring (every 10s) — Waveshare only (AXP2101 PMU)
   if (power_init_done && (millis() - last_power_check_ms >= 10000)) {
     last_power_check_ms = millis();
     int bat_pct = power.read_battery_percent();
@@ -1062,6 +1063,7 @@ void loop() {
       DBG_PRINTLN("[Power] VBUS connected");
     }
   }
+#endif
 
   // Keep UI/state in response mode until backend confirms all audio is done.
   if (resume_recorder_after_response && !button_abort && conversation_active) {
