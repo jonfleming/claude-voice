@@ -381,7 +381,9 @@ void setupLVGL()
 // Initialize the display
 void Display::init(int screenDir)
 {
+  log("display", "Initializing display");
   setupTFT(screenDir);
+  log("display", "Initializing LVGL");
   setupLVGL();
 }
 

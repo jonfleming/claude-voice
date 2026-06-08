@@ -671,6 +671,12 @@ void setup() {
   APP_SERIAL.println("[Setup] Initializing...");
   
   // Display
+#if defined(BOARD_WAVESHARE_AMOLED)
+  // Serial1 must be initialized before display.init() because display.cpp log()
+  // writes to DISPLAY_DEBUG_SERIAL (Serial1) — without this, log() has undefined
+  // behavior and no debug output is visible.
+  Serial1.begin(115200);
+#endif
   display.init(TFT_DIRECTION);
   // Show boot instruction at top of screen
   display.showBootInstructions("Press button to start a conversation.");

@@ -156,6 +156,23 @@ A simple CLI tool to verify connectivity:
 python test_ping.py [SERVER_IP] 8080
 ```
 
+## Hardware Comparison
+
+| Board | Define | Display | Audio | Touch | Power | Price (est.) |
+|-------|--------|---------|-------|-------|-------|-------------|
+| **Freenove ESP32-S3 Media Kit** (default) | *(none)* | ST7796 320×480 parallel TFT | External I2S mic + I2S DAC | None | USB only | ~$25 |
+| **AIPI-Lite** | `BOARD_AIPI_LITE` | ST7735 128×128 SPI | ES8311 I2S codec | None | Battery (GPIO10 keep-alive) | ~$18 |
+| **Waveshare ESP32-S3-Touch-AMOLED-1.8** | `BOARD_WAVESHARE_AMOLED` | SH8601 368×448 QSPI AMOLED | ES8311 I2S codec | FT3168 I2C touch | AXP2101 PMU + battery | ~$35 |
+
+### Key differences
+
+- **Display quality**: The Waveshare's AMOLED panel (368×448, 240 ppi) is the highest resolution and offers true blacks. The Freenove's parallel TFT (320×480) is larger but uses more power. The AIPI-Lite's SPI display (128×128) is the smallest.
+- **Battery**: Only the AIPI-Lite and Waveshare are battery-powered. The Waveshare includes an AXP2101 PMU for battery monitoring and charging management; the AIPI-Lite uses a simple GPIO10 keep-alive pin.
+- **Touch**: Only the Waveshare includes a capacitive touch panel (FT3168).
+- **SD card**: Only the Waveshare includes an SD card slot (SDMMC 1-bit).
+- **Sketch size**: The Waveshare sketch exceeds the default 1.2MB app partition — it requires `app3M_fat9M_16MB` (3MB app space). The Freenove and AIPI-Lite sketches fit in the default partition.
+- **I2S sharing**: The AIPI-Lite shares one I2S peripheral between mic and speaker, requiring explicit deinit/reinit between recording and playback. The Freenove and Waveshare have separate audio paths.
+
 ## Configuration
 
 Edit `.env` to configure:
