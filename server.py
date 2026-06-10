@@ -206,8 +206,7 @@ def build_first_pass_messages(user_text: str, classification: str) -> list[dict]
     """Create first-pass prompt tailored to the prompt classification."""
     if classification in {"QUESTION", "QUERY"}:
         user_content = (
-            f"{user_text}\n\n"
-            SYSTEM_PROMPT_QUESTION
+            f"{user_text}\n\n{SYSTEM_PROMPT_QUESTION}"
         )
     else:
         user_content = (
