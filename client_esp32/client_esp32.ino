@@ -836,6 +836,10 @@ void abort_conversation_and_return_idle(bool show_boot_instructions) {
   conversation_active = false;
   button_abort = true;
 
+  if (claude_ws_connected) {
+    claude_ws_send_stop();
+  }
+    
   if (recorder_task_handle != NULL) {
     DBG_PRINTLN("[Button] Stopping listening...");
     stop_recorder_task();
@@ -883,10 +887,7 @@ void handle_left_power_button_events() {
     request_display_line1("Powering off...");
     request_display_line2("");
 
-    abort_conversation_and_return_idle(false);
-    if (claude_ws_connected) {
-      claude_ws_send_stop();
-    }
+    abort_conversation_and_return_idle(true);
 
     delay(150);
     digitalWrite(SPEAKER_AMP_ENABLE, LOW);

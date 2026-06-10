@@ -79,7 +79,7 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://100.111.132.40:11434")
 if not OLLAMA_HOST.startswith("http"):
     OLLAMA_HOST = f"http://{OLLAMA_HOST}"
 OLLAMA_HOST = OLLAMA_HOST.rstrip("/")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 PIPER_MODEL = os.getenv("PIPER_MODEL", "en_US-libritts_r-medium.onnx")
 PIPER_MODEL_DIR = os.getenv("PIPER_MODEL_DIR", "")
 AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
@@ -92,6 +92,18 @@ HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://100.111.132.40:8888")
 HINDSIGHT_BANK = os.getenv("HINDSIGHT_BANK", "amicus-2026")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "256"))
 ENRICH_QUESTION_WITH_HINDSIGHT = os.getenv("ENRICH_QUESTION_WITH_HINDSIGHT", "false").lower() in {"1", "true", "yes", "on"}
+SYSTEM_PROMPT_QUESTION = """When the user asks a question, provide an immediate best-effort response without
+waiting for long-running memory retrieval or background operations.
+If additional context is being retrieved from memory, naturally acknowledge that 
+you are recalling or searching for information as part of your response. Use varied, 
+conversational language rather than repeating a fixed phrase. Examples include 
+expressing that you're thinking, trying to remember, recalling previous information, 
+or checking your memory. Do not claim certainty about information that has not yet 
+been retrieved. Frame any preliminary answer as tentative when appropriate.
+When the background memory retrieval completes, incorporate any relevant details 
+into a follow-up response. If the retrieved information changes or improves the 
+initial answer, say so clearly and continue naturally without apologizing for the 
+two-stage response."""
 
 # Global models (loaded once)
 whisper_model: Optional[WhisperModel] = None
@@ -195,8 +207,7 @@ def build_first_pass_messages(user_text: str, classification: str) -> list[dict]
     if classification in {"QUESTION", "QUERY"}:
         user_content = (
             f"{user_text}\n\n"
-            "Give an immediate best-effort answer now while you think or try to remember "
-            "additional relevant details."
+            SYSTEM_PROMPT_QUESTION
         )
     else:
         user_content = (
