@@ -569,7 +569,7 @@ bool claude_ws_send_audio_chunk(const uint8_t *pcm, size_t len) {
     static unsigned long last_chunk_print = 0;
     if (millis() - last_chunk_print > 1000) {
       last_chunk_print = millis();
-      DBG_PRINTF("[WS] Sent audio chunk, size: %u\n", (unsigned)len);
+      DBG_PRINTF("-");
     }
   }
   return ok;

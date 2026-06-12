@@ -92,14 +92,14 @@ HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://100.111.132.40:8888")
 HINDSIGHT_BANK = os.getenv("HINDSIGHT_BANK", "amicus-2026")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "256"))
 ENRICH_QUESTION_WITH_HINDSIGHT = os.getenv("ENRICH_QUESTION_WITH_HINDSIGHT", "false").lower() in {"1", "true", "yes", "on"}
-SYSTEM_PROMPT_QUESTION = """When the user asks a question, provide an immediate best-effort response without
+SYSTEM_PROMPT_QUESTION = """When the user asks a question, if no context was provided 
+in the prompt, you should give them an immediate, best-effort, response without
 waiting for long-running memory retrieval or background operations.
-If additional context is being retrieved from memory, naturally acknowledge that 
+Additional context will be retrieved from memory so you should naturally acknowledge that 
 you are recalling or searching for information as part of your response. Use varied, 
 conversational language rather than repeating a fixed phrase. Examples include 
 expressing that you're thinking, trying to remember, recalling previous information, 
-or checking your memory. Do not claim certainty about information that has not yet 
-been retrieved. Frame any preliminary answer as tentative when appropriate.
+or checking your memory. Frame any preliminary answer as tentative when appropriate.
 When the background memory retrieval completes, incorporate any relevant details 
 into a follow-up response. If the retrieved information changes or improves the 
 initial answer, say so clearly and continue naturally without apologizing for the 
