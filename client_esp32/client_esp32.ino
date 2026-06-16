@@ -22,6 +22,10 @@
 #include "driver_button.h"
 #include <ArduinoWebsockets.h>
 #include <mbedtls/base64.h>
+// ArduinoOTA
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <ArduinoOTA.h>
 // WiFi + HTTP
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -103,7 +107,7 @@ SemaphoreHandle_t ws_mutex = NULL;
 #define WIFI_PASS "goodlife"
 
 // The server that runs your transcription/TTS services (*two* Tailnet Bridge)
-#define SERVER_IP "192.168.8.145"
+//#define SERVER_IP "192.168.8.145"
 // Nimo connected to GL-SFT1200-3e1
 #define SERVER_IP "192.168.8.119"
 #define CLAUDE_VOICE_WS_PORT 8080
@@ -164,15 +168,6 @@ unsigned long left_button_press_start_ms = 0;
 bool claude_ws_send_vad_config(float energy_threshold);
 void abort_conversation_and_return_idle(bool show_boot_instructions = true);
 void handle_left_power_button_events();
-
-// ArduinoOTA
-ArduinoOTA.onStart([]() {
-  abort_conversation_and_return_idle(true);
-});
-
-ArduinoOTA.onEnd([]() {
-  // device will reboot; after reboot your normal init restarts stream
-});
 
 void request_showBootInstructions(const char *text) {
   if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
@@ -677,7 +672,10 @@ void setup() {
 
   
   ArduinoOTA
-  .onStart([]() { APP_SERIAL.println("[Setup] OTA Start"); })
+  .onStart([]() {
+     APP_SERIAL.println("[Setup] OTA Start");
+    abort_conversation_and_return_idle(true);
+   })
   .onEnd([]() { APP_SERIAL.println("\n[Setup] OTA End"); })
   .onError([](ota_error_t error) {
     APP_SERIAL.printf("[Setup] OTA Error[%u]\n", error);
@@ -961,7 +959,7 @@ int loop_counter = 0;
 void loop() {
   // oTA
   ArduinoOTA.handle();
-  
+
   // Apply any pending display requests from background tasks
   // loop_counter++;
   // if (loop_counter % 10 == 0) {

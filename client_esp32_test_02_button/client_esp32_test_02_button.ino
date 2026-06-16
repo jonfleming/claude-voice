@@ -42,6 +42,14 @@ static int last_button_state = Button::KEY_STATE_IDLE;
 static uint32_t press_count = 0;
 static uint32_t last_refresh_ms = 0;
 
+ArduinoOTA.onStart([]() {
+  stopStreaming();    // turn off mic / stop TCP to server
+});
+
+ArduinoOTA.onEnd([]() {
+  // device will reboot; after reboot your normal init restarts stream
+});
+
 
 
 const char *button_state_name(int state) {
