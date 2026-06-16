@@ -15,6 +15,13 @@
 #include <lvgl.h>
 #include <TFT_eSPI.h>   // Must be configured for ST7735 in User_Setup.h
 
+// ArduinoOTA
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <ArduinoOTA.h>
+#define WIFI_SSID "FLEMING_2"
+#define WIFI_PASS "90130762"
+
 #include "../client_esp32/board_pins.h"
 #include "../client_esp32/driver_button.h"
 #include "../client_esp32/display.h"
@@ -34,6 +41,8 @@ static const int BUTTON_INPUT_PIN = BUTTON_PIN;
 static int last_button_state = Button::KEY_STATE_IDLE;
 static uint32_t press_count = 0;
 static uint32_t last_refresh_ms = 0;
+
+
 
 const char *button_state_name(int state) {
   switch (state) {
@@ -58,8 +67,30 @@ void setup() {
     delay(10);
   }
 
+
   TEST_SERIAL.println();
   TEST_SERIAL.println("Test 02: Button input test");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    TEST_SERIAL.println("Connection Failed! Rebooting...");
+    delay(5000);
+    ESP.restart();
+  }
+
+  ArduinoOTA
+  .onStart([]() { Serial.println("Start"); })
+  .onEnd([]() { Serial.println("\nEnd"); })
+  .onError([](ota_error_t error) {
+    Serial.printf("Error[%u]\n", error);
+  });
+
+  ArduinoOTA.begin();      // start OTA service
+  Serial.println("OTA ready");
+  Serial.println(WiFi.localIP());
+
+  TEST_SERIAL.printf("[stage] Setup: Connected: %s", WiFi.localIP());
   TEST_SERIAL.println("[stage] setup: before display.init");
   display.init(TFT_DIRECTION);
   TEST_SERIAL.println("[stage] setup: after display.init");
@@ -71,6 +102,7 @@ void setup() {
 }
 
 void loop() {
+  ArduinoOTA.handle();
   button.key_scan();
   const int state = button.get_button_state();
   const int key = button.get_button_key_value();

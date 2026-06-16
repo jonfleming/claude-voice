@@ -132,7 +132,7 @@ telnet claude-voice-esp32
 telnet 192.168.x.x
 ```
 
-> **Windows**: telnet is disabled by default. Enable it via *Control Panel → Programs → Turn Windows features on or off → Telnet Client*, or use `putty.exe` in raw/telnet mode, or install [PuTTY](https://www.putty.org/).
+> **Windows**: telnet is disabled by default. Enable it via `dism /online /Enable-Feature /FeatureName:TelnetClient`, or use `putty.exe` in raw/telnet mode, or install [PuTTY](https://www.putty.org/).
 
 The log output also mirrors to the Arduino serial monitor when the USB cable is connected, so both paths work simultaneously.
 
