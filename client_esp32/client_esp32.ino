@@ -26,8 +26,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
-// WiFi + HTTP
-#include <WiFi.h>
+// HTTP
 #include <HTTPClient.h>
 #include <RemoteDebug.h>
 // Display
@@ -669,24 +668,6 @@ void setup() {
   button.init();
   APP_SERIAL.println("[Setup] Button initialized");
 
-
-  
-  ArduinoOTA
-  .onStart([]() {
-     APP_SERIAL.println("[Setup] OTA Start");
-    abort_conversation_and_return_idle(true);
-   })
-  .onEnd([]() { APP_SERIAL.println("\n[Setup] OTA End"); })
-  .onError([](ota_error_t error) {
-    APP_SERIAL.printf("[Setup] OTA Error[%u]\n", error);
-  });
-
-  ArduinoOTA.begin();      // start OTA service
-  APP_SERIAL.println("[Setup] OTA ready");
-  APP_SERIAL.print("[Setup] IP address: ");
-  APP_SERIAL.println(WiFi.localIP());
-
-
   // Initialize the I2S bus for audio input
 #ifdef BOARD_AIPI_LITE
   audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_LRCLK, AUDIO_INPUT_DIN);
@@ -732,6 +713,20 @@ void setup() {
 
   // Connect to WiFi (used for HTTP requests)
   wifi_connect();
+
+  // Setup ArduinoOTA after WiFi is connected
+  ArduinoOTA
+  .onStart([]() {
+     APP_SERIAL.println("[Setup] OTA Start");
+     abort_conversation_and_return_idle(true);
+   })
+  .onEnd([]() { APP_SERIAL.println("\n[Setup] OTA End"); })
+  .onError([](ota_error_t error) {
+    APP_SERIAL.printf("[Setup] OTA Error[%u]\n", error);
+  });
+
+  ArduinoOTA.begin();      // start OTA service
+  APP_SERIAL.println("[Setup] OTA ready");
 
   // Start RemoteDebug only after WiFi stack init/connect to avoid lwIP mbox assert.
   Debug.begin("claude-voice-esp32");

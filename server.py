@@ -118,6 +118,11 @@ def log(message: str):
     print(f"[{timestamp}.{millis}] {message}")
 
 
+def log_timing(label: str, elapsed: float):
+    """Print a timing measurement in seconds and milliseconds."""
+    log(f"[TIMING] {label}: {elapsed:.4f}s ({elapsed*1000:.0f}ms)")
+
+
 def get_hindsight_client() -> Optional[Hindsight]:
     """Get or create Hindsight client."""
     global hindsight_client
@@ -323,6 +328,7 @@ async def stream_to_ollama(
     websocket: WebSocket,
     tts_queue: Optional[asyncio.Queue] = None,
     stop_event: Optional[asyncio.Event] = None,
+    first_token_time: Optional[list[float]] = None,
 ) -> str:
     """Send message history to Ollama and stream the response with TTS."""
     global piper_process
@@ -339,6 +345,7 @@ async def stream_to_ollama(
     response_text = ""
     pending_text = ""
     session = None
+    first_token_recorded = False
 
     try:
         session = aiohttp.ClientSession()
@@ -363,6 +370,11 @@ async def stream_to_ollama(
                                 token = data["message"]["content"]
                                 response_text += token
                                 pending_text += token
+
+                                # Record first token time for latency measurement
+                                if first_token_time is not None and not first_token_recorded:
+                                    first_token_time[0] = time.perf_counter()
+                                    first_token_recorded = True
 
                                 # Send token to client
                                 if not await safe_send_json(websocket, {"type": "response", "content": token}):
@@ -392,7 +404,7 @@ async def stream_to_ollama(
                                         log(f"[TTS] Enqueuing audio generation for: {text_segment.strip()}")
                                         # Enqueue TTS so a single worker synthesizes/sends in FIFO order
                                         if tts_queue is not None:
-                                            await tts_queue.put(text_segment)
+                                            await tts_queue.put((text_segment, stop_event, time.perf_counter()))
                                         else:
                                             # Fallback to previous behavior (background task) if no queue provided
                                             asyncio.create_task(_generate_and_send_tts(text_segment, websocket))
@@ -407,7 +419,7 @@ async def stream_to_ollama(
                 if pending_text.strip() and not (stop_event is not None and stop_event.is_set()):
                     log(f"[TTS] Enqueuing background final audio for: {pending_text.strip()}")
                     if tts_queue is not None:
-                        await tts_queue.put(pending_text)
+                        await tts_queue.put((pending_text, stop_event, time.perf_counter()))
                     else:
                         asyncio.create_task(_generate_and_send_tts(pending_text, websocket))
 
@@ -526,6 +538,7 @@ async def _generate_and_send_tts(
     stop_event: Optional[asyncio.Event] = None,
 ):
     """Background helper: synthesize TTS and send to websocket without blocking the LLM stream."""
+    tts_gen_start = time.perf_counter()
     try:
         if stop_event is not None and stop_event.is_set():
             return
@@ -544,6 +557,8 @@ async def _generate_and_send_tts(
         # Also send base64 JSON for web clients
         audio_b64 = base64.b64encode(audio).decode()
         await safe_send_json(websocket, {"type": "audio", "data": audio_b64})
+        tts_elapsed = time.perf_counter() - tts_gen_start
+        log_timing(f"[TTS] segment '{text[:40]}...' gen+send", tts_elapsed)
         log(f"[TTS] Background send complete ({len(audio)} bytes)")
     except Exception as e:
         log(f"[TTS] Background exception: {e}")
@@ -554,17 +569,25 @@ async def _tts_worker(tts_queue: asyncio.Queue, websocket: WebSocket):
     and sends them to the websocket in order. Use `None` as sentinel to stop."""
     try:
         while True:
-            text = await tts_queue.get()
-            if text is None:
+            item = await tts_queue.get()
+            if item is None:
                 tts_queue.task_done()
                 break
             try:
-                if isinstance(text, tuple):
-                    text_value, stop_event = text
+                # Support both (text, stop_event, enqueue_time) tuples and plain strings (legacy)
+                if isinstance(item, tuple):
+                    text_value = item[0]
+                    stop_event = item[1] if len(item) > 1 else None
+                    enqueue_time = item[2] if len(item) > 2 else None
                 else:
-                    text_value, stop_event = text, None
+                    text_value = item
+                    stop_event = None
+                    enqueue_time = None
+                queue_wait = time.perf_counter() - enqueue_time if enqueue_time else 0.0
                 if stop_event is not None and stop_event.is_set():
                     continue
+                if queue_wait > 0.001:
+                    log_timing(f"[TTS-Worker] queue_wait (segment '{text_value[:30]}...')", queue_wait)
                 await _generate_and_send_tts(text_value, websocket, stop_event)
             except Exception as e:
                 log(f"[TTS-Worker] Exception for segment: {e}")
@@ -772,6 +795,7 @@ async def handle_websocket(websocket: WebSocket):
         turn_id_counter += 1
         active_turn_id = turn_id_counter
         current_turn_id = active_turn_id
+        turn_start = time.perf_counter()
         log(f"[Turn] Start turn_id={current_turn_id}")
         if not force:
             await safe_send_json(websocket, {"type": "stop_recording"})
@@ -780,6 +804,7 @@ async def handle_websocket(websocket: WebSocket):
         log(f"[VAD] Triggering transcription ({len(audio_data)} bytes, RMS: {total_rms:.4f})")
         await safe_send_json(websocket, {"type": "transcribing", "content": ""})
 
+        stt_start = time.perf_counter()
         try:
             text = await transcribe_audio(audio_data)
 
@@ -797,6 +822,8 @@ async def handle_websocket(websocket: WebSocket):
             if text:
                 log(f"[STT] {text}")
                 await safe_send_json(websocket, {"type": "text", "content": text})
+                stt_to_text = time.perf_counter() - turn_start
+                log_timing(f"turn_id={current_turn_id} stt_to_text", stt_to_text)
 
                 # Classification: FACT, STATEMENT, QUESTION, or QUERY
                 classification = classify_prompt_type(text)
@@ -831,7 +858,15 @@ async def handle_websocket(websocket: WebSocket):
 
                 # First pass: answer immediately while memory lookup runs in background.
                 first_pass_messages = build_first_pass_messages(text, classification)
-                first_response = await stream_to_ollama(first_pass_messages, websocket, tts_queue, stop_requested)
+                llm_start = time.perf_counter()
+                first_token_time: list[float] = [0.0]
+                first_response = await stream_to_ollama(
+                    first_pass_messages, websocket, tts_queue, stop_requested, first_token_time
+                )
+                llm_total = time.perf_counter() - llm_start
+                log_timing(f"turn_id={current_turn_id} llm_total", llm_total)
+                if first_token_time[0] > 0:
+                    log_timing(f"turn_id={current_turn_id} llm_first_token", first_token_time[0] - llm_start)
                 if not is_turn_active(current_turn_id):
                     log(f"[WS] turn_id={current_turn_id} inactive after first pass; skipping follow-up")
                     return
@@ -850,9 +885,15 @@ async def handle_websocket(websocket: WebSocket):
                     elif memories:
                         log(f"[Hindsight] turn_id={current_turn_id} context hit ({len(memories)} memories)")
                         follow_up_messages = build_contextual_messages(text, memories)
+                        follow_up_llm_start = time.perf_counter()
+                        follow_up_first_token: list[float] = [0.0]
                         second_response = await stream_to_ollama(
-                            follow_up_messages, websocket, tts_queue, stop_requested
+                            follow_up_messages, websocket, tts_queue, stop_requested, follow_up_first_token
                         )
+                        follow_up_llm_total = time.perf_counter() - follow_up_llm_start
+                        log_timing(f"turn_id={current_turn_id} llm_followup_total", follow_up_llm_total)
+                        if follow_up_first_token[0] > 0:
+                            log_timing(f"turn_id={current_turn_id} llm_followup_first_token", follow_up_first_token[0] - follow_up_llm_start)
                     else:
                         log(f"[Hindsight] turn_id={current_turn_id} context miss")
 
@@ -867,6 +908,8 @@ async def handle_websocket(websocket: WebSocket):
                 await safe_send_json(websocket, {"type": "done", "content": combined_response})
                 # Ensure all queued TTS (including any follow-up pass) is sent.
                 await tts_queue.join()
+                turn_total = time.perf_counter() - turn_start
+                log_timing(f"turn_id={current_turn_id} total_turn", turn_total)
                 if is_turn_active(current_turn_id):
                     await safe_send_json(websocket, {"type": "audio_done"})
             else:

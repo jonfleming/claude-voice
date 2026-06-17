@@ -85,7 +85,7 @@ ollama serve &
 
 6. Start the server:
 ```bash
-python server.py
+uv run server.py
 ```
 
 ## Clients
