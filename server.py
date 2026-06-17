@@ -67,9 +67,11 @@ from prompt_classifier import classify_prompt_type
 
 # Optional Python piper package (preferred over CLI if available)
 try:
-    import piper_tts as piper_pkg
-except Exception:
-    piper_pkg = None
+    import piper
+    from piper.voice import PiperVoice
+except ImportError:
+    piper = None
+    PiperVoice = None
 
 load_dotenv()
 
@@ -109,6 +111,9 @@ two-stage response."""
 whisper_model: Optional[WhisperModel] = None
 piper_process: Optional[asyncio.subprocess.Process] = None
 hindsight_client: Optional[Hindsight] = None
+# Global Piper voice cache
+piper_voice_instance: Optional['PiperVoice'] = None
+piper_voice_model_path: Optional[str] = None
 
 
 def log(message: str):
@@ -532,6 +537,19 @@ async def text_to_speech(text: str) -> Optional[bytes]:
         return None
 
 
+def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 16000, sample_width: int = 2, channels: int = 1) -> bytes:
+    """Wrap raw PCM bytes in a minimal WAV header."""
+    import struct
+    data_len = len(pcm_data)
+    header = struct.pack('<4sI4s4sIHHIIHH4sI',
+        b'RIFF', 36 + data_len, b'WAVE',
+        b'fmt ', 16, 1, channels, sample_rate,
+        sample_rate * channels * sample_width,
+        channels * sample_width, 8 * sample_width,
+        b'data', data_len)
+    return header + pcm_data
+
+
 async def _generate_and_send_tts(
     text: str,
     websocket: WebSocket,
@@ -549,8 +567,9 @@ async def _generate_and_send_tts(
         if stop_event is not None and stop_event.is_set():
             return
 
-        # Send raw binary first (preferred by embedded clients)
-        if not await safe_send_bytes(websocket, audio):
+        # Send raw binary first (preferred by embedded clients) — wrap in WAV header
+        wav_audio = _pcm_to_wav(audio)
+        if not await safe_send_bytes(websocket, wav_audio):
             log("[WS] Connection closed during background TTS send")
             return
 
@@ -559,7 +578,7 @@ async def _generate_and_send_tts(
         await safe_send_json(websocket, {"type": "audio", "data": audio_b64})
         tts_elapsed = time.perf_counter() - tts_gen_start
         log_timing(f"[TTS] segment '{text[:40]}...' gen+send", tts_elapsed)
-        log(f"[TTS] Background send complete ({len(audio)} bytes)")
+        log(f"[TTS] Background send complete ({len(wav_audio)} bytes WAV)")
     except Exception as e:
         log(f"[TTS] Background exception: {e}")
 
@@ -1170,7 +1189,6 @@ async def get_index():
                 }
 
                 function addLog(msg) {
-                    log.textContent += msg + '\\n';
                     const now = new Date();
                     const time = now.getHours().toString().padStart(2, '0') + ':' +
                                  now.getMinutes().toString().padStart(2, '0') + ':' +
