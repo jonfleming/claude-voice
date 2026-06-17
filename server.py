@@ -1171,6 +1171,12 @@ async def get_index():
 
                 function addLog(msg) {
                     log.textContent += msg + '\\n';
+                    const now = new Date();
+                    const time = now.getHours().toString().padStart(2, '0') + ':' +
+                                 now.getMinutes().toString().padStart(2, '0') + ':' +
+                                 now.getSeconds().toString().padStart(2, '0') + '.' +
+                                 Math.floor(now.getMilliseconds() / 100);
+                    log.textContent += '[' + time + '] ' + msg + '\\n';
                     log.scrollTop = log.scrollHeight;
                 }
 
