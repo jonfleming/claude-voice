@@ -49,3 +49,4 @@ yarn.lock
 # Tests
 tts_captures/
 tts_captures/*
+piper_models/*

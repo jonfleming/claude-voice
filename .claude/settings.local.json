@@ -10,7 +10,8 @@
       "Bash(.venv/bin/pytest)",
       "Bash(.venv/bin/pytest -v)",
       "Bash(mkdir /home/jon/projects/claude-voice/client_aipi)",
-      "Bash(cp -r /home/jon/projects/claude-voice/client_esp32/* /home/jon/projects/claude-voice/client_aipi)"
+      "Bash(cp -r /home/jon/projects/claude-voice/client_esp32/* /home/jon/projects/claude-voice/client_aipi)",
+      "Bash(python *)"
     ]
   }
 }

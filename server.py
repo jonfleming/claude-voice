@@ -82,7 +82,7 @@ if not OLLAMA_HOST.startswith("http"):
     OLLAMA_HOST = f"http://{OLLAMA_HOST}"
 OLLAMA_HOST = OLLAMA_HOST.rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-PIPER_MODEL = os.getenv("PIPER_MODEL", "en_US-libritts_r-medium.onnx")
+PIPER_MODEL = os.getenv("PIPER_MODEL", "en_US-amy-medium.onnx")
 PIPER_MODEL_DIR = os.getenv("PIPER_MODEL_DIR", "")
 AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
 VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "1.0"))
@@ -450,59 +450,28 @@ async def text_to_speech(text: str) -> Optional[bytes]:
     """Convert text to speech using Piper."""
     if not text.strip():
         return None
-
+    
     model_path = PIPER_MODEL
     if PIPER_MODEL_DIR:
         model_path = str(Path(PIPER_MODEL_DIR) / PIPER_MODEL)
-    # First attempt: use the `piper-tts` Python package if available.
-    if piper_pkg is not None:
+    # First attempt: use the `piper` Python package if available.
+    log(f"[TTS] Requested TTS for text: '{text[:40]}...' using model: {model_path}")
+    if piper is not None:
         try:
-            # Try several common function names that piper packages might expose.
-            candidate_names = ("synthesize", "synthesize_text", "generate", "generate_tts", "tts", "speak")
-            for name in candidate_names:
-                if hasattr(piper_pkg, name):
-                    func = getattr(piper_pkg, name)
-                    try:
-                        # Prefer keyword args where supported
-                        result = func(text, model=str(model_path), sample_rate=AUDIO_SAMPLE_RATE, length_scale=0.75)
-                    except TypeError:
-                        # Fallback to positional args
-                        try:
-                            result = func(text, str(model_path))
-                        except Exception:
-                            result = func(text)
-
-                    # If we get raw bytes, return as-is
-                    if isinstance(result, (bytes, bytearray)):
-                        log(f"[TTS] Generated {len(result)} bytes via piper_pkg.{name}")
-                        return bytes(result)
-
-                    # If we get a numpy array or list, convert to WAV bytes
-                    if isinstance(result, np.ndarray) or isinstance(result, list):
-                        arr = np.asarray(result)
-                        # If float32/64, assume -1..1 range
-                        if np.issubdtype(arr.dtype, np.floating):
-                            pcm = (arr * 32767.0).astype(np.int16)
-                        elif np.issubdtype(arr.dtype, np.integer):
-                            pcm = arr.astype(np.int16)
-                        else:
-                            pcm = arr.astype(np.int16)
-
-                        import io, wave
-                        buf = io.BytesIO()
-                        with wave.open(buf, "wb") as wf:
-                            wf.setnchannels(1)
-                            wf.setsampwidth(2)
-                            wf.setframerate(AUDIO_SAMPLE_RATE)
-                            wf.writeframes(pcm.tobytes())
-                        data = buf.getvalue()
-                        log(f"[TTS] Generated {len(data)} WAV bytes via piper_pkg.{name}")
-                        return data
-
-            # If no known function produced usable output, log and fall back
-            log("[TTS] piper_pkg available but produced no usable audio, falling back to CLI")
+            from piper.config import SynthesisConfig
+            # Load the model (cached after first call)
+            voice = PiperVoice.load(str(model_path))
+            config = SynthesisConfig(length_scale=0.50)
+            # synthesize returns an iterable of AudioChunk objects
+            pcm_bytes = b""
+            for chunk in voice.synthesize(text, syn_config=config):
+                pcm_bytes += chunk.audio_int16_bytes
+            if pcm_bytes:
+                log(f"[TTS] Generated {len(pcm_bytes)} bytes via piper Python package")
+                return pcm_bytes
+            log("[TTS] piper package produced no audio, falling back to CLI")
         except Exception as e:
-            log(f"[TTS] piper_pkg invocation failed: {e}; falling back to CLI")
+            log(f"[TTS] piper package invocation failed: {e}; falling back to CLI")
 
     # Fallback: call the `piper` CLI as before
     try:
@@ -519,7 +488,12 @@ async def text_to_speech(text: str) -> Optional[bytes]:
         stdout, stderr = await process.communicate(input=text.encode() + b"\n")
 
         if process.returncode != 0:
-            print(f"TTS error (code {process.returncode}): {stderr.decode()}")
+            err_text = stderr.decode()
+            # On Windows, piper CLI often fails with PermissionError on temp files
+            if "Permission denied" in err_text or "tmp" in err_text.lower():
+                log("[TTS] piper CLI temp file permission denied (Windows known issue); skipping CLI fallback")
+                return None
+            print(f"TTS error (code {process.returncode}): {err_text}")
             return None
 
         if stdout:
@@ -531,6 +505,9 @@ async def text_to_speech(text: str) -> Optional[bytes]:
 
     except FileNotFoundError:
         print("Piper not found. Make sure piper is in PATH or install the `piper-tts` package.")
+        return None
+    except PermissionError:
+        log("[TTS] CLI piper permission denied (Windows known issue); skipping CLI fallback")
         return None
     except Exception as e:
         print(f"TTS error: {e}")
