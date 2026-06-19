@@ -461,7 +461,7 @@ async def text_to_speech(text: str) -> Optional[bytes]:
             from piper.config import SynthesisConfig
             # Load the model (cached after first call)
             voice = PiperVoice.load(str(model_path))
-            config = SynthesisConfig(length_scale=0.50)
+            config = SynthesisConfig(length_scale=0.75)
             # synthesize returns an iterable of AudioChunk objects
             pcm_bytes = b""
             for chunk in voice.synthesize(text, syn_config=config):
@@ -513,8 +513,7 @@ async def text_to_speech(text: str) -> Optional[bytes]:
         print(f"TTS error: {e}")
         return None
 
-
-def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 16000, sample_width: int = 2, channels: int = 1) -> bytes:
+def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 22050, sample_width: int = 2, channels: int = 1) -> bytes:
     """Wrap raw PCM bytes in a minimal WAV header."""
     import struct
     data_len = len(pcm_data)
@@ -525,7 +524,6 @@ def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 16000, sample_width: int = 2
         channels * sample_width, 8 * sample_width,
         b'data', data_len)
     return header + pcm_data
-
 
 async def _generate_and_send_tts(
     text: str,
@@ -546,13 +544,15 @@ async def _generate_and_send_tts(
 
         # Send raw binary first (preferred by embedded clients) — wrap in WAV header
         wav_audio = _pcm_to_wav(audio)
+        # Jon if not await safe_send_bytes(websocket, wav_audio):
         if not await safe_send_bytes(websocket, wav_audio):
             log("[WS] Connection closed during background TTS send")
             return
 
         # Also send base64 JSON for web clients
-        audio_b64 = base64.b64encode(audio).decode()
-        await safe_send_json(websocket, {"type": "audio", "data": audio_b64})
+        # Jon
+        # audio_b64 = base64.b64encode(audio).decode()
+        # await safe_send_json(websocket, {"type": "audio", "data": audio_b64})
         tts_elapsed = time.perf_counter() - tts_gen_start
         log_timing(f"[TTS] segment '{text[:40]}...' gen+send", tts_elapsed)
         log(f"[TTS] Background send complete ({len(wav_audio)} bytes WAV)")
