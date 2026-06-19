@@ -9,69 +9,25 @@ WebSocket server that:
 5. Sends audio back over WebSocket
 """
 
+import aiohttp
 import asyncio
 import base64
 import json
-import os
-import time
-from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import Optional
-
-try:
-    import aiohttp
-except ImportError:
-    aiohttp = None
 import numpy as np
-try:
-    import uvicorn
-except ImportError:
-    uvicorn = None
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    # dotenv is optional; define no-op if unavailable
-    def load_dotenv():
-        pass
-try:
-    from faster_whisper import WhisperModel
-except ImportError:
-    # Whisper STT model is optional
-    WhisperModel = None
-try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-    from fastapi.responses import HTMLResponse
-except ImportError:
-    # FastAPI is optional; define dummy app and placeholders for import-time definitions
-    class DummyApp:
-        def __init__(self, *args, **kwargs):
-            pass
-        def websocket(self, path):
-            def decorator(func):
-                return func
-            return decorator
-        def get(self, path):
-            def decorator(func):
-                return func
-            return decorator
-    FastAPI = DummyApp
-    WebSocket = None
-    WebSocketDisconnect = Exception
-    # Dummy HTMLResponse that returns content directly
-    HTMLResponse = lambda content: content
-try:
-    from hindsight_client import Hindsight
-except ImportError:
-    Hindsight = None
+import os
+import piper
+import time
+import uvicorn
+from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+from faster_whisper import WhisperModel
+from hindsight_client import Hindsight
+from pathlib import Path
 from prompt_classifier import classify_prompt_type
-
-# Optional Python piper package (preferred over CLI if available)
-try:
-    import piper
-    from piper.voice import PiperVoice
-except ImportError:
-    piper = None
-    PiperVoice = None
+from typing import Optional
+from piper.voice import PiperVoice
 
 load_dotenv()
 
@@ -454,7 +410,7 @@ async def text_to_speech(text: str) -> Optional[bytes]:
     model_path = PIPER_MODEL
     if PIPER_MODEL_DIR:
         model_path = str(Path(PIPER_MODEL_DIR) / PIPER_MODEL)
-    # First attempt: use the `piper` Python package if available.
+
     log(f"[TTS] Requested TTS for text: '{text[:40]}...' using model: {model_path}")
     if piper is not None:
         try:
@@ -472,46 +428,6 @@ async def text_to_speech(text: str) -> Optional[bytes]:
             log("[TTS] piper package produced no audio, falling back to CLI")
         except Exception as e:
             log(f"[TTS] piper package invocation failed: {e}; falling back to CLI")
-
-    # Fallback: call the `piper` CLI as before
-    try:
-        process = await asyncio.create_subprocess_exec(
-            "piper",
-            "--model", model_path,
-            "--length_scale", "0.75",
-            "--output_file", "-",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        stdout, stderr = await process.communicate(input=text.encode() + b"\n")
-
-        if process.returncode != 0:
-            err_text = stderr.decode()
-            # On Windows, piper CLI often fails with PermissionError on temp files
-            if "Permission denied" in err_text or "tmp" in err_text.lower():
-                log("[TTS] piper CLI temp file permission denied (Windows known issue); skipping CLI fallback")
-                return None
-            print(f"TTS error (code {process.returncode}): {err_text}")
-            return None
-
-        if stdout:
-            log(f"[TTS] Generated {len(stdout)} bytes of audio (CLI)")
-            return stdout
-
-        log("[TTS] No audio data generated (CLI)")
-        return None
-
-    except FileNotFoundError:
-        print("Piper not found. Make sure piper is in PATH or install the `piper-tts` package.")
-        return None
-    except PermissionError:
-        log("[TTS] CLI piper permission denied (Windows known issue); skipping CLI fallback")
-        return None
-    except Exception as e:
-        print(f"TTS error: {e}")
-        return None
 
 def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 22050, sample_width: int = 2, channels: int = 1) -> bytes:
     """Wrap raw PCM bytes in a minimal WAV header."""
