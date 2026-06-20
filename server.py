@@ -44,6 +44,9 @@ AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
 VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "1.0"))
 VAD_MIN_SPEECH = float(os.getenv("VAD_MIN_SPEECH", "0.3"))
 VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.005"))
+# After speech starts, require RMS >= energy_threshold * ratio to reset silence.
+# Prevents ambient noise near the threshold from repeatedly zeroing silent_duration.
+VAD_SPEECH_CONTINUE_RATIO = float(os.getenv("VAD_SPEECH_CONTINUE_RATIO", "1.5"))
 WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.getenv("WS_PORT", "8080"))
 HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://100.111.132.40:8888")
@@ -512,11 +515,19 @@ async def _tts_worker(tts_queue: asyncio.Queue, websocket: WebSocket):
 class AudioBuffer:
     """Audio buffer with content-aware VAD detection."""
 
-    def __init__(self, vad_threshold: float = 1.5, min_speech: float = 0.3, energy_threshold: float = 0.005, sample_rate: int = 16000):
+    def __init__(
+        self,
+        vad_threshold: float = 1.5,
+        min_speech: float = 0.3,
+        energy_threshold: float = 0.005,
+        sample_rate: int = 16000,
+        speech_continue_ratio: float = 1.5,
+    ):
         self.buffer: list[bytes] = []
         self.vad_threshold = vad_threshold
         self.min_speech = min_speech
         self.energy_threshold = energy_threshold
+        self.speech_continue_ratio = speech_continue_ratio
         self.sample_rate = sample_rate
         self.last_audio_time: Optional[float] = None
         self.speech_start_time: Optional[float] = None
@@ -543,21 +554,36 @@ class AudioBuffer:
 
     def _update_vad(self, rms: float, duration: float, current_time: float):
         """Internal VAD state update."""
-        if rms < self.energy_threshold:
-            # accumulate silence
-            self.silent_duration += duration
-            # log(f"[VAD-Window] RMS: {rms:.5f} (silence), +{duration:.3f}s -> silent_duration={self.silent_duration:.3f}s")
-        else:
-            # Speech detected
-            if self.speech_start_time is None:
+        if self.speech_start_time is None:
+            # Pre-speech: single threshold to detect speech onset.
+            if rms >= self.energy_threshold:
                 log(f"[VAD] Speech detected (RMS: {rms:.4f})")
                 self.speech_start_time = current_time
+                self.speech_duration += duration
+                self.silent_duration = 0.0
             else:
-                # Update speech presence (useful for long speech segments)
-                # log(f"[VAD-Window] RMS: {rms:.5f} (speech), silent_duration reset")
-                pass
+                self.silent_duration += duration
+            return
+
+        continue_threshold = self.energy_threshold * self.speech_continue_ratio
+
+        if self.silent_duration > 0:
+            # Trailing silence: require stronger energy to resume speech so ambient
+            # noise near energy_threshold does not repeatedly reset the counter.
+            if rms >= continue_threshold:
+                if self.silent_duration > 0.2:
+                    log(
+                        f"[VAD] Speech continues (RMS: {rms:.4f} >= {continue_threshold:.4f}), "
+                        f"silence reset from {self.silent_duration:.2f}s"
+                    )
+                self.speech_duration += duration
+                self.silent_duration = 0.0
+            else:
+                self.silent_duration += duration
+        elif rms >= self.energy_threshold:
             self.speech_duration += duration
-            self.silent_duration = 0.0
+        else:
+            self.silent_duration += duration
 
     def add_silence(self, duration: float):
         """Manually add silence duration (used on connection timeouts)."""
@@ -609,7 +635,13 @@ async def handle_websocket(websocket: WebSocket):
     tts_queue: asyncio.Queue = asyncio.Queue()
     tts_worker_task = asyncio.create_task(_tts_worker(tts_queue, websocket))
 
-    audio_buffer = AudioBuffer(VAD_THRESHOLD, VAD_MIN_SPEECH, VAD_ENERGY_THRESHOLD, AUDIO_SAMPLE_RATE)
+    audio_buffer = AudioBuffer(
+        VAD_THRESHOLD,
+        VAD_MIN_SPEECH,
+        VAD_ENERGY_THRESHOLD,
+        AUDIO_SAMPLE_RATE,
+        VAD_SPEECH_CONTINUE_RATIO,
+    )
     is_processing = False
     stop_requested = asyncio.Event()
     processing_task: Optional[asyncio.Task] = None
@@ -1245,6 +1277,11 @@ async def get_index():
                 micStartBtn.onclick = async () => {
                     if (!ws || ws.readyState !== WebSocket.OPEN) {
                         addLog('Please connect first');
+                        return;
+                    }
+
+                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                        addLog('[Mic] Not available: use http://localhost or HTTPS');
                         return;
                     }
 

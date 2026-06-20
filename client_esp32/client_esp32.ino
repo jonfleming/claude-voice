@@ -22,6 +22,8 @@
 #include "driver_button.h"
 #include <ArduinoWebsockets.h>
 #include <mbedtls/base64.h>
+#include <time.h>
+
 // ArduinoOTA
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -51,7 +53,7 @@ RemoteDebug Debug;
 #define DBG_PRINTF(...) do { APP_SERIAL.printf(__VA_ARGS__); Debug.printf(__VA_ARGS__); } while(0)
 
 #ifdef BOARD_AIPI_LITE
-static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.004f;
+static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.005f;
 #else
 static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.07f;
 #endif
@@ -102,14 +104,17 @@ SemaphoreHandle_t ws_mutex = NULL;
 // ---------- WiFi / Server configuration (edit before upload) ----------
 //#define WIFI_SSID "FLEMING_2"
 //#define WIFI_PASS "90130762"
-#define WIFI_SSID "GL-SFT1200-3e1"
-#define WIFI_PASS "goodlife"
+//#define WIFI_SSID "GL-SFT1200-3e1"
+//#define WIFI_PASS "goodlife"
+#define WIFI_SSID "iJon"
+#define WIFI_PASS "source.code"
+
 
 // The server that runs your transcription/TTS services (*two* Tailnet Bridge)
-//#define SERVER_IP "192.168.8.145"
+//#define SERVER_HOST "192.168.8.145"
 // Nimo connected to GL-SFT1200-3e1
-#define SERVER_IP "192.168.8.119"
-#define CLAUDE_VOICE_WS_PORT 8080
+#define SERVER_HOST "voice.fleming.ai"
+#define CLAUDE_VOICE_WS_PORT 443
 #define CLAUDE_VOICE_WS_PATH "/ws"
 
 // Ollama model to use for generation (change as needed)
@@ -168,6 +173,56 @@ bool claude_ws_send_vad_config(float energy_threshold);
 void abort_conversation_and_return_idle(bool show_boot_instructions = true);
 void handle_left_power_button_events();
 
+// Cert
+const char VOICE_CA_CERT[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+)EOF";
+
+bool sync_time() {
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  struct tm timeinfo;
+  for (int i = 0; i < 20 && !getLocalTime(&timeinfo); i++) {
+    delay(500);
+  }
+  if (!getLocalTime(&timeinfo)) {
+    DBG_PRINTLN("[WiFi] NTP sync failed; TLS cert validation may fail");
+    return false;
+  }
+  DBG_PRINTF("[WiFi] Time synced: %04d-%02d-%02d %02d:%02d:%02d UTC\n",
+    timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+    timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  return true;
+}
 void request_showBootInstructions(const char *text) {
   if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
   strncpy(display_boot_buf, text, sizeof(display_boot_buf)-1);
@@ -529,11 +584,13 @@ bool claude_ws_connect() {
   if (claude_ws_connected || claude_ws_connecting) return claude_ws_connected;
 
   claude_ws_connecting = true;
-  DBG_PRINTF("[WS] Connecting to %s:%d%s\n", SERVER_IP, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
+  DBG_PRINTF("[WS] Connecting to %s:%d%s\n", SERVER_HOST, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
 
   bool ok = false;
   if (ws_mutex) xSemaphoreTake(ws_mutex, portMAX_DELAY);
-  ok = claude_ws_client.connect(SERVER_IP, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
+  
+  claude_ws_client.setCACert(VOICE_CA_CERT);
+  ok = claude_ws_client.connectSecure(SERVER_HOST, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
   if (ws_mutex) xSemaphoreGive(ws_mutex);
 
   claude_ws_connected = ok;
@@ -1093,6 +1150,7 @@ void wifi_connect() {
   APP_SERIAL.println("\n[WiFi] WiFi connected");
   APP_SERIAL.print("[WiFi] IP address: ");
   APP_SERIAL.println(WiFi.localIP());
+  sync_time();
   // Give the network stack a moment to stabilize
   delay(1000);
 }
@@ -1105,7 +1163,7 @@ void http_test_get() {
   }
 
   HTTPClient http;
-  String url = String("http://") + SERVER_IP + ":" + String(CLAUDE_VOICE_WS_PORT) + "/";
+  String url = String("https://") + SERVER_HOST;
   DBG_PRINTF("[HTTP] GET %s\r\n", url.c_str());
   http.begin(url);
   int code = http.GET();
