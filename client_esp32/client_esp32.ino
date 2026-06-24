@@ -108,7 +108,8 @@ SemaphoreHandle_t ws_mutex = NULL;
 //#define WIFI_PASS "goodlife"
 #define WIFI_SSID "iJon"
 #define WIFI_PASS "source.code"
-
+// mDNS hostname for OTA + RemoteDebug telnet (DNS labels: letters, digits, hyphen only)
+static const char *DEVICE_HOSTNAME = "claude-voice-esp32";
 
 // The server that runs your transcription/TTS services (*two* Tailnet Bridge)
 //#define SERVER_HOST "192.168.8.145"
@@ -552,27 +553,33 @@ void claude_ws_on_message(WebsocketsMessage message) {
 
 void claude_ws_on_event(WebsocketsEvent event, String data) {
   switch(event) {
-    case WebsocketsEvent::ConnectionOpened:
+    case WebsocketsEvent::ConnectionOpened: {
       claude_ws_connected = true;
       claude_ws_connecting = false;
       DBG_PRINTLN("[WS] Connection opened");
       // Defer config send to main loop to avoid taking ws_mutex re-entrantly
       // from within poll() callback context.
       claude_ws_config_pending = true;
-      request_display_line2("Connected using GL router");
+      String text = "Connected: ";
+      text += WiFi.localIP().toString();
+      request_display_line2(text.c_str());
       break;
-    case WebsocketsEvent::ConnectionClosed:
+    }
+    case WebsocketsEvent::ConnectionClosed: {
       claude_ws_connected = false;
       claude_ws_connecting = false;
       DBG_PRINTF("[WS] Connection closed: %s\n", data.c_str());
       request_display_line2("Disconnected");
       break;
-    case WebsocketsEvent::GotPing:
+    }
+    case WebsocketsEvent::GotPing: {
       DBG_PRINTLN("[WS] ping");
       break;
-    case WebsocketsEvent::GotPong:
+    }
+    case WebsocketsEvent::GotPong: {
       DBG_PRINTLN("[WS] pong event");
       break;
+    }
   }
 }
 
@@ -771,22 +778,29 @@ void setup() {
   // Connect to WiFi (used for HTTP requests)
   wifi_connect();
 
-  // Setup ArduinoOTA after WiFi is connected
-  ArduinoOTA
-  .onStart([]() {
-     APP_SERIAL.println("[Setup] OTA Start");
-     abort_conversation_and_return_idle(true);
-   })
-  .onEnd([]() { APP_SERIAL.println("\n[Setup] OTA End"); })
-  .onError([](ota_error_t error) {
-    APP_SERIAL.printf("[Setup] OTA Error[%u]\n", error);
-  });
+  // Setup ArduinoOTA after WiFi is connected (requires mDNS for IDE network ports)
+  if (WiFi.status() != WL_CONNECTED) {
+    APP_SERIAL.println("[Setup] OTA skipped: WiFi not connected");
+  } else {
+    ArduinoOTA.setHostname(DEVICE_HOSTNAME);
+    ArduinoOTA
+    .onStart([]() {
+       APP_SERIAL.println("[Setup] OTA Start");
+       abort_conversation_and_return_idle(true);
+     })
+    .onEnd([]() { APP_SERIAL.println("\n[Setup] OTA End"); })
+    .onError([](ota_error_t error) {
+      APP_SERIAL.printf("[Setup] OTA Error[%u]\n", error);
+    });
 
-  ArduinoOTA.begin();      // start OTA service
-  APP_SERIAL.println("[Setup] OTA ready");
+    ArduinoOTA.begin();
+    MDNS.addService("telnet", "tcp", 23);
+    APP_SERIAL.printf("[Setup] OTA ready at %s.local (%s)\n",
+                      DEVICE_HOSTNAME, WiFi.localIP().toString().c_str());
+  }
 
   // Start RemoteDebug only after WiFi stack init/connect to avoid lwIP mbox assert.
-  Debug.begin("claude-voice-esp32");
+  Debug.begin(DEVICE_HOSTNAME);
   Debug.setResetCmdEnabled(true);
   Debug.showProfiler(true);
 
@@ -1136,7 +1150,12 @@ void loop() {
 void wifi_connect() {
   APP_SERIAL.printf("[WiFi] Connecting to WiFi SSID: %s\r\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
+  WiFi.setHostname(DEVICE_HOSTNAME);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+  if (!MDNS.begin(DEVICE_HOSTNAME)) {
+    Serial.println("Error setting up MDNS responder!");
+  }
+  MDNS.addService("_http", "_tcp", 80);  // Critical for persistence
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
@@ -1150,6 +1169,8 @@ void wifi_connect() {
   APP_SERIAL.println("\n[WiFi] WiFi connected");
   APP_SERIAL.print("[WiFi] IP address: ");
   APP_SERIAL.println(WiFi.localIP());
+  // Power save can drop mDNS responses; OTA discovery needs reliable WiFi timing.
+  WiFi.setSleep(false);
   sync_time();
   // Give the network stack a moment to stabilize
   delay(1000);
