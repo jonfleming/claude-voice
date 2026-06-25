@@ -33,9 +33,7 @@ load_dotenv()
 
 
 # Configuration
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://100.111.132.40:11434")
-if not OLLAMA_HOST.startswith("http"):
-    OLLAMA_HOST = f"http://{OLLAMA_HOST}"
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "https://ollama.fleming.ai")
 OLLAMA_HOST = OLLAMA_HOST.rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 PIPER_MODEL = os.getenv("PIPER_MODEL", "en_US-amy-medium.onnx")
@@ -49,8 +47,8 @@ VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.005"))
 VAD_SPEECH_CONTINUE_RATIO = float(os.getenv("VAD_SPEECH_CONTINUE_RATIO", "1.5"))
 WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.getenv("WS_PORT", "8080"))
-HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://100.111.132.40:8888")
-HINDSIGHT_BANK = os.getenv("HINDSIGHT_BANK", "amicus-2026")
+HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "https://hindsight.fleming.ai")
+HINDSIGHT_BANK = os.getenv("HINDSIGHT_BANK", "Default")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "256"))
 ENRICH_QUESTION_WITH_HINDSIGHT = os.getenv("ENRICH_QUESTION_WITH_HINDSIGHT", "false").lower() in {"1", "true", "yes", "on"}
 SYSTEM_PROMPT_QUESTION = """When the user asks a question, if no context was provided 
