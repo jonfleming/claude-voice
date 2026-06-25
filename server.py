@@ -649,6 +649,10 @@ async def handle_websocket(websocket: WebSocket):
     turn_id_counter = 0
     active_turn_id = 0
     last_rms_log_time = 0
+    # Partial transcription (live captions)
+    partial_transcription_task: Optional[asyncio.Task] = None
+    partial_transcription_stop_event = asyncio.Event()
+    partial_transcription_min_speech = 0.5
 
     def track_background_task(task: asyncio.Task, label: str):
         """Track a background task for cleanup and error logging."""
@@ -667,6 +671,41 @@ async def handle_websocket(websocket: WebSocket):
 
     def is_turn_active(turn_id: int) -> bool:
         return (not stop_requested.is_set()) and (turn_id == active_turn_id)
+
+    async def partial_transcription_loop(start_turn_id: int):
+        """Periodically transcribe the current audio buffer and send partial_text."""
+        last_sent_text = ""
+        try:
+            while not partial_transcription_stop_event.is_set():
+                # Wait for the interval (with stop signal support)
+                try:
+                    await asyncio.wait_for(
+                        partial_transcription_stop_event.wait(),
+                        timeout=1.5
+                    )
+                    break  # Stop signal received
+                except asyncio.TimeoutError:
+                    pass  # Interval elapsed, continue
+
+                # Check if still valid for this turn
+                if partial_transcription_stop_event.is_set() or active_turn_id != start_turn_id:
+                    break
+
+                audio_data = audio_buffer.get_audio()
+                if len(audio_data) < 1600 or audio_buffer.speech_duration < partial_transcription_min_speech:
+                    continue
+
+                text = await transcribe_audio(audio_data)
+
+                # Double-check stop condition before sending
+                if partial_transcription_stop_event.is_set() or active_turn_id != start_turn_id:
+                    break
+
+                if text and text != last_sent_text:
+                    await safe_send_json(websocket, {"type": "partial_text", "content": text})
+                    last_sent_text = text
+        except asyncio.CancelledError:
+            pass
 
     async def reset_tts_worker():
         nonlocal tts_queue, tts_worker_task
@@ -692,10 +731,22 @@ async def handle_websocket(websocket: WebSocket):
         tts_worker_task = asyncio.create_task(_tts_worker(tts_queue, websocket))
 
     async def stop_current_processing(reason: str):
-        nonlocal is_processing, processing_task, active_turn_id
+        nonlocal is_processing, processing_task, active_turn_id, partial_transcription_task
 
         stop_requested.set()
         active_turn_id += 1
+        
+        # Cancel partial transcription
+        if partial_transcription_task and not partial_transcription_task.done():
+            partial_transcription_stop_event.set()
+            partial_transcription_task.cancel()
+            try:
+                await partial_transcription_task
+            except asyncio.CancelledError:
+                pass
+        partial_transcription_task = None
+        partial_transcription_stop_event.clear()
+        
         audio_buffer.clear()
         log(f"[WS] Stop requested: {reason}")
 
@@ -717,10 +768,21 @@ async def handle_websocket(websocket: WebSocket):
 
     async def trigger_transcription(force=False):
         """Helper to trigger transcription and LLM response."""
-        nonlocal is_processing, processing_task, turn_id_counter, active_turn_id
+        nonlocal is_processing, processing_task, turn_id_counter, active_turn_id, partial_transcription_task
         
         if is_processing and not force:
             return
+
+        # Cancel partial transcription before starting full pipeline
+        if partial_transcription_task and not partial_transcription_task.done():
+            partial_transcription_stop_event.set()
+            partial_transcription_task.cancel()
+            try:
+                await partial_transcription_task
+            except asyncio.CancelledError:
+                pass
+        partial_transcription_task = None
+        partial_transcription_stop_event.clear()
 
         audio_data = audio_buffer.get_audio()
         if not audio_data:
@@ -941,6 +1003,22 @@ async def handle_websocket(websocket: WebSocket):
                     log(f"[Audio] Current RMS: {rms:.5f} (Threshold: {audio_buffer.energy_threshold:.5f})")
                     last_rms_log_time = current_time
 
+                # Start partial transcription when speech is detected and enough speech has accumulated
+                if (not partial_transcription_task or partial_transcription_task.done()):
+                    if (audio_buffer.speech_start_time is not None and
+                        audio_buffer.silent_duration < VAD_THRESHOLD and
+                        audio_buffer.speech_duration >= partial_transcription_min_speech and
+                        not is_processing):
+                        partial_transcription_stop_event.clear()
+                        partial_transcription_task = asyncio.create_task(
+                            partial_transcription_loop(active_turn_id)
+                        )
+                        background_tasks.add(partial_transcription_task)
+
+                        def _on_partial_done(task):
+                            background_tasks.discard(task)
+                        partial_transcription_task.add_done_callback(_on_partial_done)
+
                 # Check VAD after each chunk (handles continuous streaming)
                 if audio_buffer.check_vad():
                     launch_transcription()
@@ -1047,7 +1125,12 @@ async def get_index():
             <button id="sendBtn" class="debug-only" disabled>Send to Server</button>
             <button id="transcribeBtn" disabled>Force Transcribe</button>
 
-            <h2>3. Response Audio</h2>
+            <h2>3. Live Captions</h2>
+            <div id="liveCaptions" style="background: #1a1a2e; color: #aaa; padding: 15px; border-radius: 8px; min-height: 40px; font-family: monospace; font-style: italic;">
+                (Start speaking to see live captions...)
+            </div>
+
+            <h2>4. Response Audio</h2>
             <audio id="audioPlayer" controls></audio>
 
             <h2>Log</h2>
@@ -1194,30 +1277,62 @@ async def get_index():
                                 const msg = JSON.parse(event.data);
                                 console.log('Received message:', msg.type);
                                 
-                                if (msg.type === 'transcribing') {
+                                if (msg.type === 'partial_text') {
+                                    const captions = document.getElementById('liveCaptions');
+                                    if (captions) {
+                                        captions.textContent = msg.content;
+                                        captions.style.fontStyle = 'normal';
+                                        captions.style.color = '#ffaa00';
+                                    }
+                                } else if (msg.type === 'transcribing') {
                                     isServerProcessing = true;
                                     awaitingAudioDone = false;
+                                    const captions = document.getElementById('liveCaptions');
+                                    if (captions) {
+                                        captions.textContent = '(Transcribing...)';
+                                        captions.style.color = '#aaa';
+                                        captions.style.fontStyle = 'italic';
+                                    }
                                     addLog('[WS] Transcribing...');
                                 } else if (msg.type === 'done') {
                                     isServerProcessing = false;
                                     awaitingAudioDone = true;
                                     addLog('[WS] Response text complete');
+                                    const captions = document.getElementById('liveCaptions');
+                                    if (captions) {
+                                        captions.textContent = '(Response generated)';
+                                        captions.style.color = '#aaa';
+                                        captions.style.fontStyle = 'italic';
+                                    }
                                 } else if (msg.type === 'audio_done') {
                                     awaitingAudioDone = false;
                                     addLog('[WS] Response audio complete');
                                 } else if (msg.type === 'text') {
                                     addLog('[STT] ' + msg.content);
+                                    const captions = document.getElementById('liveCaptions');
+                                    if (captions) {
+                                        captions.textContent = msg.content;
+                                        captions.style.color = '#0f0';
+                                        captions.style.fontStyle = 'normal';
+                                    }
                                 } else if (msg.type === 'error') {
                                     addLog('[Error] ' + msg.content);
                                     isServerProcessing = false;
                                     awaitingAudioDone = false;
-                                } else if (msg.type === 'audio' && msg.data) {
-                                    // Skip if we already got binary for this segment
-                                    // (Simplification: if we send both, we'll play twice if not careful.
-                                    // However, the ESP32 prefers binary, web can handle both. 
-                                    // To avoid double playback, we only use binary if available.)
-                                    // For now, let's just log and skip JSON audio if it's there
-                                    console.log('Received JSON audio (skipped in favor of binary)');
+                        } else if (msg.type === 'audio' && msg.data) {
+                            // Skip if we already got binary for this segment
+                            // (Simplification: if we send both, we'll play twice if not careful.
+                            // However, the ESP32 prefers binary, web can handle both. 
+                            // To avoid double playback, we only use binary if available.)
+                            // For now, let's just log and skip JSON audio if it's there
+                            console.log('Received JSON audio (skipped in favor of binary)');
+                        } else if (msg.type === 'stop_recording') {
+                            const captions = document.getElementById('liveCaptions');
+                            if (captions) {
+                                captions.textContent = '(Processing...)';
+                                captions.style.color = '#ffaa00';
+                                captions.style.fontStyle = 'italic';
+                            }
                                 }
                             } catch (e) {
                                 addLog('[WS] ' + event.data);

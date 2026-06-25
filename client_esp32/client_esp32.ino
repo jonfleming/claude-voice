@@ -404,8 +404,8 @@ void handle_claude_ws_json(const String &json) {
   // returned to idle boot state.
   if (!conversation_active &&
       (type == "text" || type == "response" || type == "audio" ||
-       type == "stop_recording" || type == "transcribing" ||
-       type == "done" || type == "audio_done")) {
+        type == "stop_recording" || type == "transcribing" ||
+        type == "partial_text" || type == "done" || type == "audio_done")) {
     DBG_PRINTF("[WS] Ignoring '%s' while idle\n", type.c_str());
     return;
   }
@@ -437,6 +437,12 @@ void handle_claude_ws_json(const String &json) {
     DBG_PRINTLN("[WS] Transcribing...");
     request_display_line1("Transcribing...");
     request_display_line2("");
+  } else if (type == "partial_text") {
+    String text = extract_json_string_value(json, "content");
+    text.trim();
+    if (text.length() > 0) {
+      request_display_line1(text.c_str());
+    }
   } else if (type == "done") {
     if (!button_abort && conversation_active) {
       DBG_PRINTLN("\n[WS] Response complete.");

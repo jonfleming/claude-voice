@@ -130,6 +130,14 @@ connectBtn.onclick = () => {
                 awaitingAudioDone = false;
                 statusMsg.textContent = 'AI is thinking...';
                 currentAiMessageElement = null; // Prepare for new response
+            } else if (msg.type === 'partial_text') {
+                // Live captions: show partial transcription while speaking
+                if (!currentAiMessageElement) {
+                    currentAiMessageElement = addMessage('', 'user-partial');
+                }
+                currentAiMessageElement.textContent = msg.content;
+                currentAiMessageElement.classList.add('partial');
+                messageFeed.scrollTop = messageFeed.scrollHeight;
             } else if (msg.type === 'stop_recording') {
                 // Server is processing, stop the microphone
                 if (micStream) {
@@ -146,7 +154,14 @@ connectBtn.onclick = () => {
                     startMicrophone();
                 }
             } else if (msg.type === 'text') {
-                addMessage(msg.content, 'user');
+                if (currentAiMessageElement && currentAiMessageElement.classList.contains('user-partial')) {
+                    currentAiMessageElement.classList.remove('user-partial', 'partial');
+                    currentAiMessageElement.classList.add('user-message');
+                    currentAiMessageElement.textContent = msg.content;
+                } else {
+                    addMessage(msg.content, 'user');
+                }
+                currentAiMessageElement = null;
             } else if (msg.type === 'response') {
                 updateAiMessage(msg.content);
             } else if (msg.type === 'audio' && msg.data) {

@@ -106,6 +106,25 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom-right-radius: 2px;
 }
 
+.user-partial {
+  align-self: flex-end;
+  background: var(--user-msg-bg);
+  border-bottom-right-radius: 2px;
+  color: var(--secondary-color);
+  font-style: italic;
+  opacity: 0.7;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 0.4; }
+}
+
+.partial {
+  border-bottom-right-radius: 12px;
+}
+
 .ai-message {
   align-self: flex-start;
   background: var(--ai-msg-bg);
