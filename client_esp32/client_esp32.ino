@@ -102,20 +102,22 @@ SemaphoreHandle_t ws_mutex = NULL;
 // Define the size of PSRAM in bytes
 #define MOLLOC_SIZE (4 * 1024 * 1024)
 // ---------- WiFi / Server configuration (edit before upload) ----------
-//#define WIFI_SSID "FLEMING_2"
-//#define WIFI_PASS "90130762"
+#define WIFI_SSID "FLEMING_2"
+#define WIFI_PASS "90130762"
 //#define WIFI_SSID "GL-SFT1200-3e1"
 //#define WIFI_PASS "goodlife"
-#define WIFI_SSID "iJon"
-#define WIFI_PASS "source.code"
+//#define WIFI_SSID "iJon"
+//#define WIFI_PASS "source.code"
 // mDNS hostname for OTA + RemoteDebug telnet (DNS labels: letters, digits, hyphen only)
 static const char *DEVICE_HOSTNAME = "claude-voice-esp32";
 
 // The server that runs your transcription/TTS services (*two* Tailnet Bridge)
 //#define SERVER_HOST "192.168.8.145"
 // Nimo connected to GL-SFT1200-3e1
-#define SERVER_HOST "voice.fleming.ai"
-#define CLAUDE_VOICE_WS_PORT 443
+//#define SERVER_HOST "voice.fleming.ai"
+//#define CLAUDE_VOICE_WS_PORT 443
+#define SERVER_HOST "192.168.0.112"
+#define CLAUDE_VOICE_WS_PORT 8080
 #define CLAUDE_VOICE_WS_PATH "/ws"
 
 // Ollama model to use for generation (change as needed)
@@ -441,6 +443,7 @@ void handle_claude_ws_json(const String &json) {
     String text = extract_json_string_value(json, "content");
     text.trim();
     if (text.length() > 0) {
+      DBG_PRINTF("[WS] partial_text: %s\n", text.c_str());
       request_display_line1(text.c_str());
     }
   } else if (type == "done") {
@@ -602,8 +605,13 @@ bool claude_ws_connect() {
   bool ok = false;
   if (ws_mutex) xSemaphoreTake(ws_mutex, portMAX_DELAY);
   
-  claude_ws_client.setCACert(VOICE_CA_CERT);
-  ok = claude_ws_client.connectSecure(SERVER_HOST, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
+  // Use TLS only for port 443; plain WebSocket for local/dev servers
+  if (CLAUDE_VOICE_WS_PORT == 443) {
+    claude_ws_client.setCACert(VOICE_CA_CERT);
+    ok = claude_ws_client.connectSecure(SERVER_HOST, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
+  } else {
+    ok = claude_ws_client.connect(SERVER_HOST, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
+  }
   if (ws_mutex) xSemaphoreGive(ws_mutex);
 
   claude_ws_connected = ok;

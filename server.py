@@ -651,6 +651,7 @@ async def handle_websocket(websocket: WebSocket):
     partial_transcription_task: Optional[asyncio.Task] = None
     partial_transcription_stop_event = asyncio.Event()
     partial_transcription_min_speech = 0.5
+    partial_transcription_turn_id = 0
 
     def track_background_task(task: asyncio.Task, label: str):
         """Track a background task for cleanup and error logging."""
@@ -673,6 +674,8 @@ async def handle_websocket(websocket: WebSocket):
     async def partial_transcription_loop(start_turn_id: int):
         """Periodically transcribe the current audio buffer and send partial_text."""
         last_sent_text = ""
+        DBG_PREFIX = "[Partial]"
+        log(f"{DBG_PREFIX} loop started (turn_id={start_turn_id})")
         try:
             while not partial_transcription_stop_event.is_set():
                 # Wait for the interval (with stop signal support)
@@ -686,23 +689,34 @@ async def handle_websocket(websocket: WebSocket):
                     pass  # Interval elapsed, continue
 
                 # Check if still valid for this turn
-                if partial_transcription_stop_event.is_set() or active_turn_id != start_turn_id:
+                if partial_transcription_stop_event.is_set() or partial_transcription_turn_id != start_turn_id:
+                    log(f"{DBG_PREFIX} aborted: partial_turn_id={partial_transcription_turn_id} != start_turn_id={start_turn_id}")
                     break
 
                 audio_data = audio_buffer.get_audio()
                 if len(audio_data) < 1600 or audio_buffer.speech_duration < partial_transcription_min_speech:
+                    log(f"{DBG_PREFIX} skipped: data_len={len(audio_data)}, speech_dur={audio_buffer.speech_duration:.2f}s")
                     continue
 
                 text = await transcribe_audio(audio_data)
 
                 # Double-check stop condition before sending
-                if partial_transcription_stop_event.is_set() or active_turn_id != start_turn_id:
+                if partial_transcription_stop_event.is_set() or partial_transcription_turn_id != start_turn_id:
+                    log(f"{DBG_PREFIX} aborted before send: partial_turn_id={partial_transcription_turn_id} != start_turn_id={start_turn_id}")
                     break
 
                 if text and text != last_sent_text:
-                    await safe_send_json(websocket, {"type": "partial_text", "content": text})
-                    last_sent_text = text
+                    log(f"{DBG_PREFIX} sending: {text[:80]}...")
+                    sent = await safe_send_json(websocket, {"type": "partial_text", "content": text})
+                    if sent:
+                        last_sent_text = text
+                    else:
+                        log(f"{DBG_PREFIX} send failed, stopping")
+                        break
+                else:
+                    log(f"{DBG_PREFIX} no change: last='{last_sent_text[:40]}...' curr='{text[:40]}...'")
         except asyncio.CancelledError:
+            log(f"{DBG_PREFIX} cancelled")
             pass
 
     async def reset_tts_worker():
@@ -1007,9 +1021,11 @@ async def handle_websocket(websocket: WebSocket):
                         audio_buffer.silent_duration < VAD_THRESHOLD and
                         audio_buffer.speech_duration >= partial_transcription_min_speech and
                         not is_processing):
+                        partial_transcription_turn_id += 1
+                        log(f"[Partial] Starting partial transcription: speech_start_time={audio_buffer.speech_start_time}, speech_duration={audio_buffer.speech_duration:.2f}s, silent_duration={audio_buffer.silent_duration:.2f}s, partial_turn_id={partial_transcription_turn_id}")
                         partial_transcription_stop_event.clear()
                         partial_transcription_task = asyncio.create_task(
-                            partial_transcription_loop(active_turn_id)
+                            partial_transcription_loop(partial_transcription_turn_id)
                         )
                         background_tasks.add(partial_transcription_task)
 
