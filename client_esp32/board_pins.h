@@ -75,8 +75,8 @@
 #define AUDIO_OUTPUT_LRC          41
 #define AUDIO_OUTPUT_DOUT          1
 
-#define TOUCH_CS                  -1
-
 #endif  // BOARD_AIPI_LITE
 
 #endif  // BOARD_PINS_H
+
+#define TOUCH_CS                  -1
