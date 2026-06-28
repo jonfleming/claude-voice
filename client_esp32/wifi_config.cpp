@@ -33,7 +33,14 @@
 // Local hostname for WiFi STA mode (mirrors client_esp32.ino)
 static const char* WIFI_HOSTNAME = "claude-voice-esp32";
 
-static Preferences prefs;
+static Preferences* s_prefs = nullptr;
+
+static Preferences& get_prefs() {
+  if (!s_prefs) {
+    s_prefs = new Preferences();
+  }
+  return *s_prefs;
+}
 static WebServer web_server(80);
 static TinyPortal portal;
 
@@ -92,10 +99,10 @@ void handle_save() {
   password.toCharArray(stored_password, sizeof(stored_password));
 
   // Persist to NVS
-  prefs.begin("wifi", false);
-  prefs.putString("ssid",    stored_ssid);
-  prefs.putString("password", stored_password);
-  prefs.end();
+  get_prefs().begin("wifi", false);
+  get_prefs().putString("ssid",    stored_ssid);
+  get_prefs().putString("password", stored_password);
+  get_prefs().end();
 
   // Show confirmation on display
   request_display_line1("WiFi credentials saved");
@@ -145,14 +152,23 @@ static void stop_captive_portal() {
  * *after* the WiFi stack is initialized (in loop-based setup phase).
  */
 void wifi_config_init() {
-  prefs.begin("wifi");  // read-write (creates NVS entry if missing)
+  get_prefs().begin("wifi", true);  // read-only
 
-  prefs.getString("ssid", stored_ssid, sizeof(stored_ssid));
-  prefs.getString("password", stored_password, sizeof(stored_password));
-  prefs.end();
+  char tmp_ssid[64]    = {0};
+  char tmp_pass[64]    = {0};
+
+  get_prefs().getString("ssid", tmp_ssid, sizeof(tmp_ssid));
+  get_prefs().getString("password", tmp_pass, sizeof(tmp_pass));
+  get_prefs().end();
 
   // If NVS has no SSID, the caller must enter captive portal mode.
-  _needs_portal = (stored_ssid[0] == '\0');
+  _needs_portal = (tmp_ssid[0] == '\0');
+
+  if (_needs_portal) {
+    // Clear the buffers so wifi_config_connect() knows no credentials exist.
+    stored_ssid[0]    = '\0';
+    stored_password[0] = '\0';
+  }
 }
 
 /**
