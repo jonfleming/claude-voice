@@ -12,27 +12,16 @@
 *   To build for **AIPI Lite**: define `BOARD_AIPI_LITE`
 *   (add -DBOARD_AIPI_LITE in build flags, or uncomment the define in board_pins.h).
 */
-#include "sketch_config.h"
-
-#include "client_esp32.h"
-#include "board_pins.h"
-#include "wifi_config.h"
-#include <esp_heap_caps.h>
 #include "driver_audio_input.h"
 #include "driver_audio_output.h"
 #include "driver_button.h"
+#include "client_esp32.h"
+#include "board_pins.h"
+#include <esp_heap_caps.h>
 #include <ArduinoWebsockets.h>
 #include <mbedtls/base64.h>
-#include <time.h>
-
-// Wi-Fi Portal
-#include <TinyPortal.h>
-
-// ArduinoOTA
+// WiFi + HTTP
 #include <WiFi.h>
-#include <ESPmDNS.h>
-#include <ArduinoOTA.h>
-// HTTP
 #include <HTTPClient.h>
 #include <RemoteDebug.h>
 // Display
@@ -46,21 +35,9 @@ using namespace websockets;
 
 RemoteDebug Debug;
 
-#ifdef BOARD_AIPI_LITE
-#define APP_SERIAL Serial
-#else
-#define APP_SERIAL Serial0
-#endif
-
-#define DBG_PRINTLN(msg) do { APP_SERIAL.printf("[%8lu] ", millis()); APP_SERIAL.println(msg); Debug.printf("[%8lu] ", millis()); Debug.println(msg); } while(0)
-#define DBG_PRINT(msg) do { APP_SERIAL.print(msg); Debug.print(msg); } while(0)
-#define DBG_PRINTF(...) do { APP_SERIAL.printf(__VA_ARGS__); Debug.printf(__VA_ARGS__); } while(0)
-
-#ifdef BOARD_AIPI_LITE
-static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.005f;
-#else
-static const float CLIENT_VAD_ENERGY_THRESHOLD = 0.07f;
-#endif
+#define DBG_PRINTLN(msg) do { Debug.printf("[%8lu] ", millis()); Debug.println(msg); } while(0)
+#define DBG_PRINT(msg) Debug.print(msg)
+#define DBG_PRINTF(...) Debug.printf(__VA_ARGS__)
 
 // Mutex to protect display request buffers
 SemaphoreHandle_t display_mutex = NULL;
@@ -105,23 +82,16 @@ SemaphoreHandle_t ws_mutex = NULL;
 
 // Define the size of PSRAM in bytes
 #define MOLLOC_SIZE (4 * 1024 * 1024)
+
 // ---------- WiFi / Server configuration (edit before upload) ----------
 //#define WIFI_SSID "FLEMING_2"
 //#define WIFI_PASS "90130762"
-//#define WIFI_SSID "GL-SFT1200-3e1"
-//#define WIFI_PASS "goodlife"
-//#define WIFI_SSID "iJon"
-//#define WIFI_PASS "source.code"
-// WiFi credentials are now managed by wifi_config.h / wifi_config.cpp
-// Send serial command "wifi" to re-enter the captive-portal setup.
-// mDNS hostname for OTA + RemoteDebug telnet (DNS labels: letters, digits, hyphen only)
-static const char *DEVICE_HOSTNAME = "claude-voice-esp32";
+#define WIFI_SSID "GL-SFT1200-3e1"
+#define WIFI_PASS "goodlife"
 
 // The server that runs your transcription/TTS services (*two* Tailnet Bridge)
-//#define SERVER_HOST "192.168.8.145"
-// Nimo connected to GL-SFT1200-3e1
-#define SERVER_HOST "voice.fleming.ai"
-#define CLAUDE_VOICE_WS_PORT 443
+#define SERVER_IP "192.168.8.145"
+#define CLAUDE_VOICE_WS_PORT 8080
 #define CLAUDE_VOICE_WS_PATH "/ws"
 
 // Ollama model to use for generation (change as needed)
@@ -157,7 +127,6 @@ volatile bool display_clear_pending = false;
 WebsocketsClient claude_ws_client;
 volatile bool claude_ws_connected = false;
 volatile bool claude_ws_connecting = false;
-volatile bool claude_ws_config_pending = false;
 
 // Coordinate backend "done" with actual audio playback completion.
 volatile bool resume_recorder_after_response = false;
@@ -168,68 +137,6 @@ volatile bool response_audio_seen = false;
 volatile bool response_audio_done_received = false;
 volatile bool conversation_active = false;
 
-#ifdef BOARD_AIPI_LITE
-static const uint32_t POWER_BUTTON_LONG_PRESS_MS = 2000;
-volatile bool power_off_in_progress = false;
-bool left_button_last_pressed = false;
-bool left_button_longpress_fired = false;
-unsigned long left_button_press_start_ms = 0;
-#endif
-
-bool claude_ws_send_vad_config(float energy_threshold);
-void abort_conversation_and_return_idle(bool show_boot_instructions = true);
-void handle_left_power_button_events();
-
-// Cert
-const char VOICE_CA_CERT[] PROGMEM = R"EOF(
------BEGIN CERTIFICATE-----
-MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
-TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
-cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
-WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
-ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
-MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
-h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
-0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
-A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
-T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
-B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
-B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
-KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
-OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
-jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
-qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
-rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
-HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
-hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
-ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
-3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
-NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
-ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
-TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
-jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
-oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
-4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
-mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
-emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
------END CERTIFICATE-----
-)EOF";
-
-bool sync_time() {
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  struct tm timeinfo;
-  for (int i = 0; i < 20 && !getLocalTime(&timeinfo); i++) {
-    delay(500);
-  }
-  if (!getLocalTime(&timeinfo)) {
-    DBG_PRINTLN("[WiFi] NTP sync failed; TLS cert validation may fail");
-    return false;
-  }
-  DBG_PRINTF("[WiFi] Time synced: %04d-%02d-%02d %02d:%02d:%02d UTC\n",
-    timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-    timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-  return true;
-}
 void request_showBootInstructions(const char *text) {
   if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
   strncpy(display_boot_buf, text, sizeof(display_boot_buf)-1);
@@ -311,7 +218,7 @@ size_t convert_input_to_backend_pcm(const uint8_t *in, size_t in_len, uint8_t *o
   // DC removal and Gain settings
   static float dc_offset = 0;
   const float alpha = 0.999f;
-  const float gain = 12.0f; // ~22dB software gain for better accuracy
+  const float gain = 24.0f; // ~22dB software gain for better accuracy
 
   int16_t *out16 = (int16_t *)out;
 
@@ -391,7 +298,6 @@ void play_backend_audio_base64(const String &b64_audio) {
 #ifdef BOARD_AIPI_LITE
   digitalWrite(SPEAKER_AMP_ENABLE, LOW);  // Disable speaker amp
   delay(10);
-  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_LRCLK, AUDIO_INPUT_DIN);
 #endif
   // ======================================================
 
@@ -429,7 +335,7 @@ void handle_claude_ws_json(const String &json) {
     String token = extract_json_string_value(json, "content");
     // Do NOT trim token here; Ollama often sends tokens with leading/trailing spaces
     if (token.length() > 0) {
-      APP_SERIAL.print(token);
+      Serial.print(token);
       request_display_line2(token.c_str());
     }
   } else if (type == "audio") {
@@ -478,13 +384,6 @@ void handle_claude_ws_json(const String &json) {
     DBG_PRINTF("[WS] Backend error: %s\n", err.c_str());
     request_display_line1("Backend error");
     request_display_line2(err.c_str());
-  } else if (type == "config_ack") {
-    String threshold = extract_json_string_value(json, "energy_threshold");
-    if (threshold.length() > 0) {
-      DBG_PRINTF("[WS] Config ack energy_threshold=%s\n", threshold.c_str());
-    } else {
-      DBG_PRINTLN("[WS] Config ack received");
-    }
   } else if (type == "pong") {
     DBG_PRINTLN("[WS] pong");
   } else {
@@ -509,12 +408,6 @@ void claude_ws_on_message(WebsocketsMessage message) {
         request_display_line2("");
       }
       player_task_handle = (TaskHandle_t)1;
-
-    #ifdef BOARD_AIPI_LITE
-      // The ES8311 input/output paths share the same I2S/codec resources.
-      // Release RX before reconfiguring TX for playback to avoid channel allocation failures.
-      audio_input_deinit();
-    #endif
       
       // ============ AIPI-Lite Speaker Amp Enable ============
 #ifdef BOARD_AIPI_LITE
@@ -544,7 +437,6 @@ void claude_ws_on_message(WebsocketsMessage message) {
 #ifdef BOARD_AIPI_LITE
       digitalWrite(SPEAKER_AMP_ENABLE, LOW);  // Disable speaker amp
       delay(10);
-      audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_LRCLK, AUDIO_INPUT_DIN);
 #endif
       // ======================================================
 
@@ -559,33 +451,24 @@ void claude_ws_on_message(WebsocketsMessage message) {
 
 void claude_ws_on_event(WebsocketsEvent event, String data) {
   switch(event) {
-    case WebsocketsEvent::ConnectionOpened: {
+    case WebsocketsEvent::ConnectionOpened:
       claude_ws_connected = true;
       claude_ws_connecting = false;
       DBG_PRINTLN("[WS] Connection opened");
-      // Defer config send to main loop to avoid taking ws_mutex re-entrantly
-      // from within poll() callback context.
-      claude_ws_config_pending = true;
-      String text = "Connected: ";
-      text += WiFi.localIP().toString();
-      request_display_line2(text.c_str());
+      request_display_line2("Connected using GL router");
       break;
-    }
-    case WebsocketsEvent::ConnectionClosed: {
+    case WebsocketsEvent::ConnectionClosed:
       claude_ws_connected = false;
       claude_ws_connecting = false;
       DBG_PRINTF("[WS] Connection closed: %s\n", data.c_str());
       request_display_line2("Disconnected");
       break;
-    }
-    case WebsocketsEvent::GotPing: {
+    case WebsocketsEvent::GotPing:
       DBG_PRINTLN("[WS] ping");
       break;
-    }
-    case WebsocketsEvent::GotPong: {
+    case WebsocketsEvent::GotPong:
       DBG_PRINTLN("[WS] pong event");
       break;
-    }
   }
 }
 
@@ -597,13 +480,11 @@ bool claude_ws_connect() {
   if (claude_ws_connected || claude_ws_connecting) return claude_ws_connected;
 
   claude_ws_connecting = true;
-  DBG_PRINTF("[WS] Connecting to %s:%d%s\n", SERVER_HOST, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
+  DBG_PRINTF("[WS] Connecting to %s:%d%s\n", SERVER_IP, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
 
   bool ok = false;
   if (ws_mutex) xSemaphoreTake(ws_mutex, portMAX_DELAY);
-  
-  claude_ws_client.setCACert(VOICE_CA_CERT);
-  ok = claude_ws_client.connectSecure(SERVER_HOST, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
+  ok = claude_ws_client.connect(SERVER_IP, CLAUDE_VOICE_WS_PORT, CLAUDE_VOICE_WS_PATH);
   if (ws_mutex) xSemaphoreGive(ws_mutex);
 
   claude_ws_connected = ok;
@@ -644,7 +525,7 @@ bool claude_ws_send_audio_chunk(const uint8_t *pcm, size_t len) {
     static unsigned long last_chunk_print = 0;
     if (millis() - last_chunk_print > 1000) {
       last_chunk_print = millis();
-      DBG_PRINTF("-");
+      DBG_PRINTF("[WS] Sent audio chunk, size: %u\n", (unsigned)len);
     }
   }
   return ok;
@@ -666,35 +547,8 @@ bool claude_ws_send_transcribe() {
   return true;
 }
 
-bool claude_ws_send_vad_config(float energy_threshold) {
-  if (!claude_ws_connected) return false;
-  char msg[96];
-  snprintf(msg, sizeof(msg), "{\"type\":\"config\",\"energy_threshold\":%.5f}", energy_threshold);
-
-  bool ok = false;
-  if (ws_mutex) xSemaphoreTake(ws_mutex, portMAX_DELAY);
-  ok = claude_ws_client.send(msg);
-  if (ws_mutex) xSemaphoreGive(ws_mutex);
-
-  if (!ok) {
-    DBG_PRINTLN("[WS] Failed to send config message");
-    claude_ws_connected = false;
-    return false;
-  }
-  DBG_PRINTF("[WS] Sent config energy_threshold=%.5f\n", energy_threshold);
-  return true;
-}
-
 // Track last debounced button state to detect edges
 int last_button_state_for_toggle = Button::KEY_STATE_IDLE;
-
-// ---- setup phase flags (processed in loop()) ---------------------
-static bool setup_phase_portal = false;
-static bool setup_phase_wifi   = false;
-static bool setup_phase_ota    = false;
-static bool setup_phase_debug  = false;
-static bool setup_phase_ws     = false;
-static bool setup_complete     = false;
 
 // Setup function to initialize the hardware and software components
 void setup() {
@@ -706,45 +560,28 @@ void setup() {
   digitalWrite(POWER_KEEP_ALIVE_PIN, HIGH);  // Keep device powered on battery
   delay(10);  // Brief delay to stabilize power
 
-  // Left button controls power latch behavior on AIPI-Lite.
-  pinMode(BUTTON_PIN_LEFT, INPUT_PULLUP);
-
   // Speaker Amplifier Control (start disabled)
   pinMode(SPEAKER_AMP_ENABLE, OUTPUT);
   digitalWrite(SPEAKER_AMP_ENABLE, LOW);  // Amp disabled by default
-#endif
 
-  // Initialize the board-selected serial port at 115200 baud.
-  APP_SERIAL.begin(115200);
-  // Match test behavior: wait briefly for monitor, but continue for battery/standalone mode.
-  uint32_t serial_wait_start = millis();
-  while (!APP_SERIAL && (millis() - serial_wait_start < 3000)) {
-    delay(10);
-  }
-
-  APP_SERIAL.println();
-  APP_SERIAL.println("[Setup] Stage 1: serial ready");
-
-#ifdef BOARD_AIPI_LITE
   // Battery Voltage Monitoring (optional)
   pinMode(BATTERY_ADC_PIN, INPUT);
   analogSetAttenuation(ADC_11db);  // ~0-3.3V input range
-  APP_SERIAL.println("[Setup] Stage 2: battery ADC configured");
 #endif
   // ===============================================================
 
-  APP_SERIAL.println("[Setup] Initializing...");
-  
+  // Initialize the serial communication at 115200 baud rate
+  Serial.begin(115200);
+  // Wait for the serial port to be ready
+  while (!Serial) {
+    delay(10);
+  }
   // Display
   display.init(TFT_DIRECTION);
   // Show boot instruction at top of screen
   display.showBootInstructions("Press button to start a conversation.");
-  APP_SERIAL.println("");
+  Serial.println("");
   request_display_line2("");
-
-  // Button
-  button.init();
-  APP_SERIAL.println("[Setup] Button initialized");
 
   // Initialize the I2S bus for audio input
 #ifdef BOARD_AIPI_LITE
@@ -753,27 +590,8 @@ void setup() {
   audio_input_init(AUDIO_INPUT_SCK, AUDIO_INPUT_WS, AUDIO_INPUT_DIN);
 #endif
   // Initialize the I2S bus for audio output
-#ifdef BOARD_AIPI_LITE
-  if (!audio_output_codec_init()) {
-    APP_SERIAL.println("[Setup] ES8311 codec init failed");
-  } else {
-    APP_SERIAL.println("[Setup] ES8311 codec initialized");
-  }
-  if (!i2s_output_init_mclk(AUDIO_OUTPUT_MCLK, AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
-    APP_SERIAL.println("[Setup] I2S output (MCLK) init failed");
-  } else {
-    APP_SERIAL.println("[Setup] I2S output (MCLK) initialized");
-  }
-  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_LRCLK, AUDIO_INPUT_DIN);
-#else
-  if (!i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT)) {
-    APP_SERIAL.println("[Setup] I2S output init failed");
-  } else {
-    APP_SERIAL.println("[Setup] I2S output initialized");
-  }
-#endif
+  i2s_output_init(AUDIO_OUTPUT_BCLK, AUDIO_OUTPUT_LRC, AUDIO_OUTPUT_DOUT);
   // Set default volume to ~half (range 0-21)
-  APP_SERIAL.println("[Setup] Setting volume to 10 (approx half)");
   audio_output_set_volume(10);
 
   // Create button handler task
@@ -782,30 +600,28 @@ void setup() {
   // Create mutex for display buffer protection
   display_mutex = xSemaphoreCreateMutex();
   if (!display_mutex) {
-    APP_SERIAL.println("[Setup] Warning: failed to create display mutex");
+    Serial.println("[Setup] Warning: failed to create display mutex");
   }
   ws_mutex = xSemaphoreCreateMutex();
   if (!ws_mutex) {
-    APP_SERIAL.println("[Setup] Warning: failed to create websocket mutex");
+    Serial.println("[Setup] Warning: failed to create websocket mutex");
   }
 
-  // Load WiFi credentials from NVS (or sets flag to enter captive portal).
-  // If no credentials exist, the captive portal is started in the loop-based
-  // setup phase (after the WiFi stack is initialized).
-  APP_SERIAL.println("[Setup] Starting WiFi configuration...");
-  wifi_config_init();
+  // Connect to WiFi (used for HTTP requests)
+  wifi_connect();
 
-  // Jon
-  setup_complete = true;
-  
-  // Transition to loop-based setup phase.
-  if (wifi_config_ssid()[0] != '\0') {
-    // Credentials found — proceed to connect WiFi.
-    setup_phase_wifi = true;
-  } else {
-    // No credentials — enter captive portal in the setup phase.
-    setup_phase_portal = true;
-  }
+  // Start RemoteDebug only after WiFi stack init/connect to avoid lwIP mbox assert.
+  Debug.begin("claude-voice-esp32");
+  Debug.setResetCmdEnabled(true);
+  Debug.showProfiler(true);
+
+  // Configure websocket callbacks and connect to claude-voice backend.
+  claude_ws_client.onMessage(claude_ws_on_message);
+  claude_ws_client.onEvent(claude_ws_on_event);
+  claude_ws_connect();
+
+  DBG_PRINTLN("[Setup] RemoteDebug ready");
+  DBG_PRINTLN("[Setup] Serial commands: (w)s reconnect WS, (i)p info\n");
 }
 
 /* Main recording task loop */
@@ -819,6 +635,11 @@ void loop_task_sound_recorder(void *pvParameters) {
 
   if (!claude_ws_connected) {
     claude_ws_connect();
+  }
+
+  // Signal backend that we are starting to send audio
+  if (claude_ws_connected) {
+    claude_ws_send_transcribe();
   }
 
   button_abort = false;
@@ -917,78 +738,33 @@ void stop_recorder_task(void) {
   }
 }
 
-void abort_conversation_and_return_idle(bool show_boot_instructions) {
-  conversation_active = false;
-  button_abort = true;
-
-  if (claude_ws_connected) {
-    claude_ws_send_stop();
-  }
-    
-  if (recorder_task_handle != NULL) {
-    DBG_PRINTLN("[Button] Stopping listening...");
-    stop_recorder_task();
-  }
-
-  bool was_player_running = (player_task_handle != NULL);
-  if (was_player_running) {
-    DBG_PRINTLN("[Button] Stopping playback...");
-    stop_player_task();
-    i2s_output_stream_end();
-  }
-
-  resume_recorder_after_response = false;
-  response_done_received = false;
-  response_audio_seen = false;
-  response_audio_done_received = false;
-  last_audio_payload_ms = 0;
-
-  if (!was_player_running) {
-    stop_player_task();
-  }
-
-  request_clear_lines();
-  if (show_boot_instructions) {
-    request_showBootInstructions("Press button to start a conversation.");
-  }
-}
-
-void handle_left_power_button_events() {
-#ifdef BOARD_AIPI_LITE
-  if (power_off_in_progress) return;
-
-  const bool pressed = (digitalRead(BUTTON_PIN_LEFT) == LOW);
-  if (pressed && !left_button_last_pressed) {
-    left_button_press_start_ms = millis();
-    left_button_longpress_fired = false;
-  }
-
-  if (pressed && !left_button_longpress_fired &&
-      (millis() - left_button_press_start_ms >= POWER_BUTTON_LONG_PRESS_MS)) {
-    left_button_longpress_fired = true;
-    power_off_in_progress = true;
-
-    DBG_PRINTLN("[Power] Left button long press: cutting power latch");
-    request_display_line1("Powering off...");
-    request_display_line2("");
-
-    abort_conversation_and_return_idle(true);
-
-    delay(150);
-    digitalWrite(SPEAKER_AMP_ENABLE, LOW);
-    digitalWrite(POWER_KEEP_ALIVE_PIN, LOW);
-  }
-
-  left_button_last_pressed = pressed;
-#endif
-}
-
 void handle_button_events() {
   int button_state = button.get_button_state();
   if (button_state == Button::KEY_STATE_PRESSED && last_button_state_for_toggle != Button::KEY_STATE_PRESSED) {
     // If either recorder or player is running, stop them
     if (recorder_task_handle != NULL || player_task_handle != NULL) {
-      abort_conversation_and_return_idle(true);
+      conversation_active = false;
+      button_abort = true;
+      if (recorder_task_handle != NULL) {
+        DBG_PRINTLN("[Button] Stopping listening...");
+        stop_recorder_task();
+      }
+      bool was_player_running = (player_task_handle != NULL);
+      if (was_player_running) {
+        DBG_PRINTLN("[Button] Stopping playback...");
+        stop_player_task();
+        i2s_output_stream_end();
+      }
+      resume_recorder_after_response = false;
+      response_done_received = false;
+      response_audio_seen = false;
+      response_audio_done_received = false;
+      last_audio_payload_ms = 0;
+      if (!was_player_running) {
+        stop_player_task();
+      }
+      request_clear_lines();
+      request_showBootInstructions("Press button to start a conversation.");
     } else {
       // Start a new conversation
       button_abort = false;
@@ -1008,7 +784,6 @@ void handle_button_events() {
 
 void loop_task_button_handler(void *pvParameters) {
   while (1) {
-    handle_left_power_button_events();
     button.key_scan();
     handle_button_events();
     vTaskDelay(20 / portTICK_PERIOD_MS);
@@ -1018,89 +793,6 @@ void loop_task_button_handler(void *pvParameters) {
 // Main loop function that runs continuously
 int loop_counter = 0;
 void loop() {
-  // ---- One-time setup phases (run after loop() first enters) -------
-  if (!setup_complete) {
-    // Phase 0: Start captive portal if no credentials in NVS.
-    APP_SERIAL.println("[Loop Setup] Phase 0: Captive portal check");
-    if (setup_phase_portal) {
-      setup_phase_portal = false;
-      wifi_config_start_portal();
-      // Skip remaining setup — device waits for user to provision WiFi.
-    }
-
-    // Phase 1: Connect WiFi using provisioned credentials.
-    APP_SERIAL.println("[Loop Setup] Phase 1: WiFi connect");
-    if (setup_phase_wifi) {
-      setup_phase_wifi = false;
-      if (wifi_config_connect()) {
-        sync_time();
-        setup_phase_ota = true;
-      } else {
-        DBG_PRINTLN("[Setup] WiFi connect failed — will retry in loop");
-      }
-    }
-
-    // Phase 2: ArduinoOTA + mDNS (requires WiFi connected).
-    APP_SERIAL.println("[Loop Setup] Phase 2: ArduinoOTA + mDNS");
-    if (setup_phase_ota) {
-      setup_phase_ota = false;
-      if (WiFi.status() == WL_CONNECTED) {
-        if (!MDNS.begin(DEVICE_HOSTNAME)) {
-          Serial.println("Error setting up MDNS responder!");
-        }
-        MDNS.addService("_http", "_tcp", 80);
-
-        ArduinoOTA.setHostname(DEVICE_HOSTNAME);
-        ArduinoOTA
-        .onStart([]() {
-           APP_SERIAL.println("[Setup] OTA Start");
-           abort_conversation_and_return_idle(true);
-         })
-        .onEnd([]() { APP_SERIAL.println("\n[Setup] OTA End"); })
-        .onError([](ota_error_t error) {
-          APP_SERIAL.printf("[Setup] OTA Error[%u]\n", error);
-        });
-
-        ArduinoOTA.begin();
-        MDNS.addService("telnet", "tcp", 23);
-        APP_SERIAL.printf("[Setup] OTA ready at %s.local (%s)\n",
-                          DEVICE_HOSTNAME, WiFi.localIP().toString().c_str());
-      } else {
-        APP_SERIAL.println("[Setup] OTA skipped: WiFi not connected");
-      }
-      setup_phase_debug = true;
-    }
-
-    // Phase 3: RemoteDebug (requires WiFi stack init).
-    if (setup_phase_debug) {
-      APP_SERIAL.println("[Loop Setup] Phase 3: RemoteDebug");
-      setup_phase_debug = false;
-      Debug.begin(DEVICE_HOSTNAME);
-      Debug.setResetCmdEnabled(true);
-      Debug.showProfiler(true);
-      DBG_PRINTLN("[Setup] RemoteDebug ready");
-      DBG_PRINTLN("[Setup] Serial commands: (w)s reconnect WS, (i)p info\n");
-      setup_phase_ws = true;
-    }
-
-    // Phase 4: WebSocket callbacks + connect.
-    if (setup_phase_ws) {
-      APP_SERIAL.println("[Loop Setup] Phase 4: WebSocket callbacks + connect");
-      setup_phase_ws = false;
-      claude_ws_client.onMessage(claude_ws_on_message);
-      claude_ws_client.onEvent(claude_ws_on_event);
-      claude_ws_connect();
-      setup_complete = true;
-    }
-  }
-  // ------------------------------------------------------------------
-
-  // oTA
-  ArduinoOTA.handle();
-
-  // Process captive portal DNS hijack + web requests (no-op when not in portal mode)
-  wifi_config_loop();
-
   // Apply any pending display requests from background tasks
   // loop_counter++;
   // if (loop_counter % 10 == 0) {
@@ -1192,11 +884,6 @@ void loop() {
   // Keep websocket alive and process backend messages.
   Debug.handle();
   claude_ws_poll();
-  if (claude_ws_connected && claude_ws_config_pending) {
-    if (claude_ws_send_vad_config(CLIENT_VAD_ENERGY_THRESHOLD)) {
-      claude_ws_config_pending = false;
-    }
-  }
   // Light reconnect policy while idle.
   static unsigned long last_ws_retry = 0;
   if (!claude_ws_connected && millis() - last_ws_retry > 2000) {
@@ -1204,8 +891,8 @@ void loop() {
     claude_ws_connect();
   }
   // Simple serial UI
-  if (APP_SERIAL.available()) {
-    String input = APP_SERIAL.readStringUntil('\n');
+  if (Serial.available()) {
+    String input = Serial.readStringUntil('\n');
     input.trim();
     if (input == "w") {
       DBG_PRINTLN("[Loop] Reconnecting websocket...");
@@ -1213,12 +900,34 @@ void loop() {
       claude_ws_connect();
     } else if (input == "i") {
       // Print IP info
-      APP_SERIAL.print("[Loop] IP: ");
-      APP_SERIAL.println(WiFi.localIP());
+      Serial.print("[Loop] IP: ");
+      Serial.println(WiFi.localIP());
     }
   }
   // Delay for 10 milliseconds
   delay(10);
+}
+
+// Connect to WiFi with simple retry logic
+void wifi_connect() {
+  Serial.printf("[WiFi] Connecting to WiFi SSID: %s\r\n", WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    if (millis() - start > 20000) {
+      Serial.println("\n[WiFi] WiFi connect timeout");
+      return;
+    }
+  }
+  Serial.println("\n[WiFi] WiFi connected");
+  Serial.print("[WiFi] IP address: ");
+  Serial.println(WiFi.localIP());
+  // Give the network stack a moment to stabilize
+  delay(1000);
 }
 
 // Simple HTTP GET to the server root for a connectivity test
@@ -1229,7 +938,7 @@ void http_test_get() {
   }
 
   HTTPClient http;
-  String url = String("https://") + SERVER_HOST;
+  String url = String("http://") + SERVER_IP + ":" + String(CLAUDE_VOICE_WS_PORT) + "/";
   DBG_PRINTF("[HTTP] GET %s\r\n", url.c_str());
   http.begin(url);
   int code = http.GET();

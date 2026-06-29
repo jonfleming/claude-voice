@@ -1,7 +1,7 @@
-#ifndef TEST_03_SPEAKER_WAVE_SKETCH_CONFIG_H
-#define TEST_03_SPEAKER_WAVE_SKETCH_CONFIG_H
+#ifndef TEST_02_BUTTON_SKETCH_CONFIG_H
+#define TEST_02_BUTTON_SKETCH_CONFIG_H
 
-// Test 03 is currently configured for AIPI Lite.
+// Test 02 is currently configured for AIPI Lite.
 // Comment this out to build the same sketch for Freenove.
 #define BOARD_AIPI_LITE
 

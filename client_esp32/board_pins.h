@@ -1,15 +1,14 @@
 #ifndef BOARD_PINS_H
 #define BOARD_PINS_H
 
-#include "sketch_config.h"
-
 // =============================================================================
 // Board Pin Profile
 // =============================================================================
 // Default build targets Freenove ESP32-S3 Media Kit.
 // To build for AIPI Lite: define BOARD_AIPI_LITE
 //   - Add -DBOARD_AIPI_LITE in build flags, or
-//   - set it in sketch_config.h for Arduino IDE builds.
+//   - uncomment the line below for quick toggling in the IDE.
+//#define BOARD_AIPI_LITE
 // =============================================================================
 
 #ifdef BOARD_AIPI_LITE
@@ -75,8 +74,8 @@
 #define AUDIO_OUTPUT_LRC          41
 #define AUDIO_OUTPUT_DOUT          1
 
+#define TOUCH_CS                  -1
+
 #endif  // BOARD_AIPI_LITE
 
 #endif  // BOARD_PINS_H
-
-#define TOUCH_CS                  -1

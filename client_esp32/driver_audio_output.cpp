@@ -306,7 +306,6 @@ void audio_output_set_volume(int volume) {
   if (volume > 21) volume = 21;
   s_volume_factor = (float)volume / 21.0f;
   audio.setVolume(volume);
-  AUDIO_OUTPUT_DEBUG_SERIAL.println("Set volume to " + String(volume));
 }
 
 //Query volume
