@@ -792,8 +792,12 @@ void setup() {
   // Load WiFi credentials from NVS (or sets flag to enter captive portal).
   // If no credentials exist, the captive portal is started in the loop-based
   // setup phase (after the WiFi stack is initialized).
+  APP_SERIAL.println("[Setup] Starting WiFi configuration...");
   wifi_config_init();
 
+  // Jon
+  setup_complete = true;
+  
   // Transition to loop-based setup phase.
   if (wifi_config_ssid()[0] != '\0') {
     // Credentials found — proceed to connect WiFi.
@@ -1017,6 +1021,7 @@ void loop() {
   // ---- One-time setup phases (run after loop() first enters) -------
   if (!setup_complete) {
     // Phase 0: Start captive portal if no credentials in NVS.
+    APP_SERIAL.println("[Loop Setup] Phase 0: Captive portal check");
     if (setup_phase_portal) {
       setup_phase_portal = false;
       wifi_config_start_portal();
@@ -1024,6 +1029,7 @@ void loop() {
     }
 
     // Phase 1: Connect WiFi using provisioned credentials.
+    APP_SERIAL.println("[Loop Setup] Phase 1: WiFi connect");
     if (setup_phase_wifi) {
       setup_phase_wifi = false;
       if (wifi_config_connect()) {
@@ -1035,6 +1041,7 @@ void loop() {
     }
 
     // Phase 2: ArduinoOTA + mDNS (requires WiFi connected).
+    APP_SERIAL.println("[Loop Setup] Phase 2: ArduinoOTA + mDNS");
     if (setup_phase_ota) {
       setup_phase_ota = false;
       if (WiFi.status() == WL_CONNECTED) {
@@ -1066,6 +1073,7 @@ void loop() {
 
     // Phase 3: RemoteDebug (requires WiFi stack init).
     if (setup_phase_debug) {
+      APP_SERIAL.println("[Loop Setup] Phase 3: RemoteDebug");
       setup_phase_debug = false;
       Debug.begin(DEVICE_HOSTNAME);
       Debug.setResetCmdEnabled(true);
@@ -1077,6 +1085,7 @@ void loop() {
 
     // Phase 4: WebSocket callbacks + connect.
     if (setup_phase_ws) {
+      APP_SERIAL.println("[Loop Setup] Phase 4: WebSocket callbacks + connect");
       setup_phase_ws = false;
       claude_ws_client.onMessage(claude_ws_on_message);
       claude_ws_client.onEvent(claude_ws_on_event);

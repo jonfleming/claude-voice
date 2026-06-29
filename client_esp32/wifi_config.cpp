@@ -30,6 +30,18 @@
 
 #include "client_esp32.h"
 
+// Board-specific Serial (matches client_esp32.ino)
+#ifdef BOARD_AIPI_LITE
+#define WIFI_SERIAL Serial
+#else
+#define WIFI_SERIAL Serial0
+#endif
+
+// Debug macro — matches DBG_PRINTF style from client_esp32.ino
+#define WIFI_DBG(...) do { WIFI_SERIAL.printf(__VA_ARGS__); } while(0)
+#define WIFI_DBG_LN(msg) do { WIFI_SERIAL.println(msg); } while(0)
+#define WIFI_DBG_PRINTF(...) do { WIFI_SERIAL.printf(__VA_ARGS__); } while(0)
+
 // Local hostname for WiFi STA mode (mirrors client_esp32.ino)
 static const char* WIFI_HOSTNAME = "claude-voice-esp32";
 
@@ -119,7 +131,10 @@ void handle_not_found() {
 // ---- helpers to manage AP + portal lifecycle ---------------------
 
 static void start_captive_portal(const char* ap_ssid) {
+  WIFI_DBG_LN("[WiFi] start_captive_portal: starting...");
+
   // Start AP
+  WIFI_DBG_PRINTF("[WiFi] start_captive_portal: calling WiFi.softAP('%s')\r\n", ap_ssid);
   WiFi.softAP(ap_ssid);
   delay(500);
 
@@ -127,15 +142,19 @@ static void start_captive_portal(const char* ap_ssid) {
   web_server.on("/", handle_portal_root);
   web_server.on("/save", HTTP_POST, handle_save);
   web_server.onNotFound(handle_not_found);
+  WIFI_DBG_LN("[WiFi] start_captive_portal: calling web_server.begin()");
   web_server.begin();
 
   // Attach TinyPortal: starts DNS hijack + captive detection on the server
+  WIFI_DBG_LN("[WiFi] start_captive_portal: calling portal.begin()");
   portal.begin(web_server);
 
   // Show captive portal instructions on display
   request_showBootInstructions("WiFi Setup");
   request_display_line1("Connect to: ");
   request_display_line2(ap_ssid);
+
+  WIFI_DBG_LN("[WiFi] start_captive_portal: done");
 }
 
 static void stop_captive_portal() {
@@ -152,6 +171,11 @@ static void stop_captive_portal() {
  * *after* the WiFi stack is initialized (in loop-based setup phase).
  */
 void wifi_config_init() {
+  WIFI_DBG_LN("[WiFi] wifi_config_init: reading NVS...");
+
+  // Jon
+  return;
+
   get_prefs().begin("wifi", true);  // read-only
 
   char tmp_ssid[64]    = {0};
@@ -168,6 +192,9 @@ void wifi_config_init() {
     // Clear the buffers so wifi_config_connect() knows no credentials exist.
     stored_ssid[0]    = '\0';
     stored_password[0] = '\0';
+    WIFI_DBG_LN("[WiFi] wifi_config_init: no credentials in NVS — portal required");
+  } else {
+    WIFI_DBG_PRINTF("[WiFi] wifi_config_init: loaded SSID='%s'\r\n", tmp_ssid);
   }
 }
 
@@ -176,12 +203,16 @@ void wifi_config_init() {
  * Returns true on success, false on timeout.
  */
 bool wifi_config_connect() {
+  WIFI_DBG_LN("[WiFi] wifi_config_connect: starting...");
+
   if (stored_ssid[0] == '\0') {
+    WIFI_DBG_LN("[WiFi] wifi_config_connect: no SSID configured");
     request_display_line1("WiFi not configured");
     request_display_line2("Run wifi_config_init() first");
     return false;
   }
 
+  WIFI_DBG_PRINTF("[WiFi] wifi_config_connect: connecting to '%s'\r\n", stored_ssid);
   request_display_line1("Connecting to WiFi");
   request_display_line2(stored_ssid);
 
@@ -195,12 +226,14 @@ bool wifi_config_connect() {
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     if (millis() - start > 20000) {
+      WIFI_DBG_LN("[WiFi] wifi_config_connect: timeout");
       request_display_line1("WiFi connect timeout");
       request_display_line2("Try again...");
       return false;
     }
   }
 
+  WIFI_DBG_PRINTF("[WiFi] wifi_config_connect: connected! IP=%s\r\n", WiFi.localIP().toString().c_str());
   request_display_line1("WiFi connected");
   request_display_line2(WiFi.localIP().toString().c_str());
 
@@ -247,7 +280,10 @@ void wifi_config_enter_portal() {
  * phase (after WiFi stack is initialized).
  */
 void wifi_config_start_portal() {
+  WIFI_DBG_LN("[WiFi] wifi_config_start_portal: starting...");
+  WIFI_DBG_LN("[WiFi] wifi_config_start_portal: about to call start_captive_portal");
   start_captive_portal("claude-voice-setup");
+  WIFI_DBG_LN("[WiFi] wifi_config_start_portal: done");
 }
 
 /**
