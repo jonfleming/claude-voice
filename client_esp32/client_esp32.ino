@@ -102,12 +102,12 @@ SemaphoreHandle_t ws_mutex = NULL;
 // Define the size of PSRAM in bytes
 #define MOLLOC_SIZE (4 * 1024 * 1024)
 // ---------- WiFi / Server configuration (edit before upload) ----------
-//#define WIFI_SSID "FLEMING_2"
-//#define WIFI_PASS "90130762"
+#define WIFI_SSID "FLEMING_2"
+#define WIFI_PASS "90130762"
 //#define WIFI_SSID "GL-SFT1200-3e1"
 //#define WIFI_PASS "goodlife"
-#define WIFI_SSID "iJon"
-#define WIFI_PASS "source.code"
+//#define WIFI_SSID "iJon"
+//#define WIFI_PASS "source.code"
 // mDNS hostname for OTA + RemoteDebug telnet (DNS labels: letters, digits, hyphen only)
 static const char *DEVICE_HOSTNAME = "claude-voice-esp32";
 
@@ -117,9 +117,6 @@ static const char *DEVICE_HOSTNAME = "claude-voice-esp32";
 #define SERVER_HOST "voice.fleming.ai"
 #define CLAUDE_VOICE_WS_PORT 443
 #define CLAUDE_VOICE_WS_PATH "/ws"
-
-// Ollama model to use for generation (change as needed)
-#define OLLAMA_MODEL "llama3.2"
 
 // Save wav data
 uint8_t *wav_buffer;
@@ -421,7 +418,7 @@ void handle_claude_ws_json(const String &json) {
     }
   } else if (type == "response") {
     String token = extract_json_string_value(json, "content");
-    // Do NOT trim token here; Ollama often sends tokens with leading/trailing spaces
+    
     if (token.length() > 0) {
       APP_SERIAL.print(token);
       request_display_line2(token.c_str());
