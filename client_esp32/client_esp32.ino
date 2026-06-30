@@ -685,12 +685,13 @@ bool claude_ws_send_vad_config(float energy_threshold) {
 int last_button_state_for_toggle = Button::KEY_STATE_IDLE;
 
 // ---- setup phase flags (processed in loop()) ---------------------
-static bool setup_phase_portal = false;
-static bool setup_phase_wifi   = false;
-static bool setup_phase_ota    = false;
-static bool setup_phase_debug  = false;
-static bool setup_phase_ws     = false;
-static bool setup_complete     = false;
+static bool setup_phase0_portal = false;
+static bool setup_phase1_saved  = false;
+static bool setup_phase2_wifi   = false;
+static bool setup_phase3_ota    = false;
+static bool setup_phase4_debug  = false;
+static bool setup_phase5_ws     = false;
+static bool setup_complete      = false;
 
 // Setup function to initialize the hardware and software components
 void setup() {
@@ -793,12 +794,13 @@ void setup() {
   if (wifi_config_ssid()[0] != '\0') {
     APP_SERIAL.printf("[Setup] Found WiFi credentials: SSID='%s'\n", wifi_config_ssid());
     // Credentials found — proceed to connect WiFi.
-    setup_phase_wifi = true;
+    setup_phase0_portal = true;
+    setup_phase1_saved = true;
   } else {
-    // No credentials — leave setup_phase_portal as false so loop() Phase 0
+    // No credentials — leave setup_phase0_portal as false so loop() Phase 0
     // actually starts the captive portal.  (Setting it true here would cause
-    // loop() to skip Phase 0 because its guard is `if (!setup_phase_portal)`.
-    // setup_phase_portal is already false by default.)
+    // loop() to skip Phase 0 because its guard is `if (!setup_phase0_portal)`.
+    // setup_phase0_portal is already false by default.)
   }
 }
 
@@ -1010,7 +1012,7 @@ void loop_task_button_handler(void *pvParameters) {
 }
 
 void portal_saved() {
-  setup_phase_portal = true;
+  setup_phase1_saved = true;  
 }
 
 // Main loop function that runs continuously
@@ -1022,50 +1024,53 @@ void loop() {
   // ---- One-time setup phases (run after loop() first enters) -------
   if (!setup_complete) {
     // Phase 0: Start captive portal if no credentials in NVS.
-    if (!setup_phase_portal && !setup_phase_wifi) {
-      if (loop_counter % 1000 == 0) {
+    if (!setup_phase0_portal) {
+      if (loop_counter % 5000 == 0) {
               APP_SERIAL.print("-");
       }
 
-      // No credentials — start the captive portal (one-shot, guarded by setup_phase_portal).
+      // No credentials — start the captive portal (one-shot, guarded by setup_phase0_portal).
       APP_SERIAL.println("[Loop Setup] Phase 0: Starting captive portal");
       wifi_config_start_portal();
+      setup_phase0_portal = true;
+      APP_SERIAL.println("[Loop Setup] Phase 1: Waiting for portal credentials to be saved...");
       return;
     }
 
     // Portal is running; wait for user to save credentials (which reboots).
-    // If setup_phase_portal is true but the device somehow got here without
+    // If setup_phase1_saved is true but the device somehow got here without
     // credentials, keep serving the portal.
-    if (!setup_phase_portal && wifi_config_ssid()[0] == '\0') {
-      if (loop_counter % 1000 == 0) {
+    if (!setup_phase1_saved && wifi_config_ssid()[0] == '\0') {
+      if (loop_counter % 5000 == 0) {
               APP_SERIAL.print("=");
       }
-
+      
       // Must process web server + display while portal is active,
       // otherwise the captive portal never handles client connections
       // and the display never updates.
       wifi_config_loop();
+      
       return;
     }
 
-    // Credentials now exist — proceed to Phase 1.
-    if (!setup_phase_wifi) {
-      // Phase 1: Connect WiFi using provisioned credentials.
-      APP_SERIAL.println("[Loop Setup] Phase 1: WiFi connect");
+    // Credentials now exist — proceed to Phase 2.
+    if (!setup_phase2_wifi) {
+      // Phase 2: Connect WiFi using provisioned credentials.
+      APP_SERIAL.println("[Loop Setup] Phase 2: WiFi connect");
 
       if (wifi_config_connect()) {
         sync_time();
-        setup_phase_wifi = true;
+        setup_phase2_wifi = true;
       } else {
         DBG_PRINTLN("[Setup] WiFi connect failed — will retry in loop");
         return;
       }
     }
 
-    if (!setup_phase_ota) {
+    if (!setup_phase3_ota) {
       if (WiFi.status() == WL_CONNECTED) {
-        // Phase 2: ArduinoOTA + mDNS (requires WiFi connected).
-        APP_SERIAL.println("[Loop Setup] Phase 2: ArduinoOTA + mDNS");
+        // Phase 3: ArduinoOTA + mDNS (requires WiFi connected).
+        APP_SERIAL.println("[Loop Setup] Phase 3: ArduinoOTA + mDNS");
 
         if (!MDNS.begin(DEVICE_HOSTNAME)) {
           Serial.println("Error setting up MDNS responder!");
@@ -1087,7 +1092,7 @@ void loop() {
         MDNS.addService("telnet", "tcp", 23);
         APP_SERIAL.printf("[Setup] OTA ready at %s.local (%s)\n",
                           DEVICE_HOSTNAME, WiFi.localIP().toString().c_str());
-        setup_phase_ota = true;
+        setup_phase3_ota = true;
         return;
       } else {
         APP_SERIAL.println("[Setup] OTA skipped: WiFi not connected");
@@ -1095,21 +1100,21 @@ void loop() {
       }
     }
 
-    // Phase 3: RemoteDebug (requires WiFi stack init).
-    if (!setup_phase_debug) {
-      APP_SERIAL.println("[Loop Setup] Phase 3: RemoteDebug");
+    // Phase 4: RemoteDebug (requires WiFi stack init).
+    if (!setup_phase4_debug) {
+      APP_SERIAL.println("[Loop Setup] Phase 4: RemoteDebug");
       Debug.begin(DEVICE_HOSTNAME);
       Debug.setResetCmdEnabled(true);
       Debug.showProfiler(true);
       DBG_PRINTLN("[Setup] RemoteDebug ready");
       DBG_PRINTLN("[Setup] Serial commands: (w)s reconnect WS, (i)p info\n");
-      setup_phase_debug = true;
+      setup_phase4_debug = true;
       return;
     }
 
-    // Phase 4: WebSocket callbacks + connect.
-    if (!setup_phase_ws) {
-      APP_SERIAL.println("[Loop Setup] Phase 4: WebSocket callbacks + connect");
+    // Phase 5: WebSocket callbacks + connect.
+    if (!setup_phase5_ws) {
+      APP_SERIAL.println("[Loop Setup] Phase 5: WebSocket callbacks + connect");
       claude_ws_client.onMessage(claude_ws_on_message);
       claude_ws_client.onEvent(claude_ws_on_event);
       claude_ws_connect();
@@ -1118,7 +1123,7 @@ void loop() {
       display.showBootInstructions("Press button to start a conversation.");
       request_display_line2("");
 
-      setup_phase_ws = true;
+      setup_phase5_ws = true;
       setup_complete = true;
     }
   }

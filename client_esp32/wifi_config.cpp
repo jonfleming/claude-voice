@@ -198,7 +198,6 @@ void wifi_config_init() {
     stored_ssid[sizeof(stored_ssid) - 1] = '\0';
     strncpy(stored_password, tmp_pass, sizeof(stored_password) - 1);
     stored_password[sizeof(stored_password) - 1] = '\0';
-    WIFI_DBG("[WiFi] wifi_config_init: loaded SSID='%s' password='%s'\n", stored_ssid, stored_password);
 
     portal_saved();
   }
