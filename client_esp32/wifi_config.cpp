@@ -11,7 +11,7 @@
  *    2. If credentials exist it returns; the sketch calls wifi_config_connect()
  *       to connect as station.
  *    3. If no credentials are found (first boot, or after a factory reset),
- *       an AP is started with SSID "claude-voice-setup" and a captive portal
+ *       an AP is started with SSID "voice-setup" and a captive portal
  *       hosts an HTML form.  The user enters the target network SSID + password,
  *       hits Save, and the ESP32 reboots to try connecting with the new
  *       credentials.
@@ -30,6 +30,7 @@
 
 #include "client_esp32.h"
 #include "sketch_config.h"
+#include "display.h"
 
 // Board-specific Serial (matches client_esp32.ino)
 #ifdef BOARD_AIPI_LITE
@@ -41,7 +42,6 @@
 // Debug macro — matches DBG_PRINTF style from client_esp32.ino
 #define WIFI_DBG(...) do { WIFI_SERIAL.printf(__VA_ARGS__); } while(0)
 #define WIFI_DBG_LN(msg) do { WIFI_SERIAL.println(msg); } while(0)
-#define WIFI_DBG_PRINTF(...) do { WIFI_SERIAL.printf(__VA_ARGS__); } while(0)
 
 // Local hostname for WiFi STA mode (mirrors client_esp32.ino)
 static const char* WIFI_HOSTNAME = "claude-voice-esp32";
@@ -135,7 +135,7 @@ static void start_captive_portal(const char* ap_ssid) {
   WIFI_DBG_LN("[WiFi] start_captive_portal: starting...");
 
   // Start AP
-  WIFI_DBG_PRINTF("[WiFi] start_captive_portal: calling WiFi.softAP('%s')\r\n", ap_ssid);
+  WIFI_DBG("[WiFi] start_captive_portal: calling WiFi.softAP('%s')\r\n", ap_ssid);
   WiFi.softAP(ap_ssid);
   delay(500);
 
@@ -193,8 +193,14 @@ void wifi_config_init() {
     stored_password[0] = '\0';
     WIFI_DBG_LN("[WiFi] wifi_config_init: no credentials in NVS — portal required");
   } else {
-    WIFI_DBG_PRINTF("[WiFi] wifi_config_init: loaded SSID='%s'\r\n", tmp_ssid);
-    void portal_saved();
+    // Copy loaded credentials to the global stored buffers.
+    strncpy(stored_ssid, tmp_ssid, sizeof(stored_ssid) - 1);
+    stored_ssid[sizeof(stored_ssid) - 1] = '\0';
+    strncpy(stored_password, tmp_pass, sizeof(stored_password) - 1);
+    stored_password[sizeof(stored_password) - 1] = '\0';
+    WIFI_DBG("[WiFi] wifi_config_init: loaded SSID='%s' password='%s'\n", stored_ssid, stored_password);
+
+    portal_saved();
   }
 }
 
@@ -212,7 +218,7 @@ bool wifi_config_connect() {
     return false;
   }
 
-  WIFI_DBG_PRINTF("[WiFi] wifi_config_connect: connecting to '%s'\r\n", stored_ssid);
+  WIFI_DBG("[WiFi] wifi_config_connect: connecting to '%s'\r\n", stored_ssid);
   request_display_line1("Connecting to WiFi");
   request_display_line2(stored_ssid);
 
@@ -224,6 +230,7 @@ bool wifi_config_connect() {
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
+    WIFI_DBG(",");
     delay(500);
     if (millis() - start > 20000) {
       WIFI_DBG_LN("[WiFi] wifi_config_connect: timeout");
@@ -233,7 +240,7 @@ bool wifi_config_connect() {
     }
   }
 
-  WIFI_DBG_PRINTF("[WiFi] wifi_config_connect: connected! IP=%s\r\n", WiFi.localIP().toString().c_str());
+  WIFI_DBG("[WiFi] wifi_config_connect: connected! IP=%s\r\n", WiFi.localIP().toString().c_str());
   request_display_line1("WiFi connected");
   request_display_line2(WiFi.localIP().toString().c_str());
 
@@ -291,6 +298,7 @@ void wifi_config_start_portal() {
  * Processes DNS hijack requests and web server clients.
  */
 void wifi_config_loop() {
+  display.routine();
   portal.loop();
   web_server.handleClient();
 }

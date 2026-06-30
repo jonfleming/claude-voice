@@ -92,6 +92,11 @@ Connect to `ws://localhost:8080/ws`
   - Button press while listening or playing is a hard stop to boot/idle state.
   - In idle state, stale in-flight conversation audio/messages from backend are ignored.
   - A new conversation starts only on an explicit new button press.
+- **client_esp32/**: ESP32 (Freenove/AIPI-Lite) hardware client.
+  - **WiFi provisioning**: On first boot (no NVS credentials), the device creates an AP called **`voice-setup`** with a captive portal. Connect to this AP and open a browser to enter your WiFi SSID + password. Credentials are saved to ESP32 NVS, surviving reboots.
+  - **Re-entering WiFi Setup**: Send the serial command `wifi` (via USB or telnet) at any time to force re-entry into the captive portal.
+  - **Wireless debugging**: RemoteDebug exposes log output over telnet at `claude-voice-esp32.local` (mDNS) or the device's IP.
+  - **Build/upload**: See `client_esp32/AGENTS.md` for arduino-cli commands. Supports Freenove (default) and AIPI-Lite boards.
 
 - **requirements.txt**: Python dependencies
 - **.env**: Configuration

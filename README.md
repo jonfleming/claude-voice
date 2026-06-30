@@ -112,14 +112,14 @@ A standalone hardware client located in `client_esp32/`.
 - **Display**: Real-time status ("Transcribing...", "Speaking...") and transcript display.
 - **Button Behavior**: If the button is pressed while listening or playing audio, the client performs a hard stop, returns to boot state (`Press button to start a conversation.`), and ignores stale in-flight backend audio/messages until the next explicit start press.
 - **Volume Control**: Software-based volume scaling for DACs without hardware controls.
-- **WiFi Provisioning**: On first boot (or when no credentials exist in NVS), the device creates an AP called **`claude-voice-setup`** with a captive portal. Connect your phone or computer to this AP and open a browser — you will be redirected to an HTML form where you can enter your target network's SSID and password. The credentials are saved to ESP32 NVS, surviving reboots.
+- **WiFi Provisioning**: On first boot (or when no credentials exist in NVS), the device creates an AP called **`voice-setup`** with a captive portal. Connect your phone or computer to this AP and open a browser — you will be redirected to an HTML form where you can enter your target network's SSID and password. The credentials are saved to ESP32 NVS, surviving reboots.
 - **Re-entering WiFi Setup**: Send the serial command `wifi` (via USB or telnet) at any time to force re-entry into the captive portal without reflashing.
 - **Setup**: 
   - Open `client_esp32/client_esp32.ino` in Arduino IDE.
   - Install `ArduinoWebsockets` and `TinyPortal` libraries.
   - Update `SERVER_HOST` in the sketch (the WebSocket server address).
   - Flash to your ESP32 board.
-  - On first boot, connect to the `claude-voice-setup` AP and provision WiFi via the captive portal.
+  - On first boot, connect to the `voice-setup` AP and provision WiFi via the captive portal.
 
 #### Wireless Debugging (RemoteDebug / telnet)
 

@@ -733,10 +733,6 @@ void setup() {
   
   // Display
   display.init(TFT_DIRECTION);
-  // Show boot instruction at top of screen
-  display.showBootInstructions("Press button to start a conversation.");
-  APP_SERIAL.println("");
-  request_display_line2("");
 
   // Button
   button.init();
@@ -795,11 +791,14 @@ void setup() {
   
   // Transition to loop-based setup phase.
   if (wifi_config_ssid()[0] != '\0') {
+    APP_SERIAL.printf("[Setup] Found WiFi credentials: SSID='%s'\n", wifi_config_ssid());
     // Credentials found — proceed to connect WiFi.
     setup_phase_wifi = true;
   } else {
-    // No credentials — enter captive portal in the setup phase.
-    setup_phase_portal = true;
+    // No credentials — leave setup_phase_portal as false so loop() Phase 0
+    // actually starts the captive portal.  (Setting it true here would cause
+    // loop() to skip Phase 0 because its guard is `if (!setup_phase_portal)`.
+    // setup_phase_portal is already false by default.)
   }
 }
 
@@ -1016,34 +1015,51 @@ void portal_saved() {
 
 // Main loop function that runs continuously
 int loop_counter = 0;
-void loop() {
-  // ---- One-time setup phases (run after loop() first enters) -------
-  if (loop_counter == 0) {
-    APP_SERIAL.println("[Loop Setup] Phase 0: Captive portal check");
-    wifi_config_start_portal();
-  }
 
+void loop() {
+  display.routine();
+
+  // ---- One-time setup phases (run after loop() first enters) -------
   if (!setup_complete) {
-    // Phase 0: Start captive portal if no credentials in NVS.    
-    if (!setup_phase_portal) {
-      
-      // Skip remaining setup — device waits for user to provision WiFi.
-      APP_SERIAL.print("=");
+    // Phase 0: Start captive portal if no credentials in NVS.
+    if (!setup_phase_portal && !setup_phase_wifi) {
+      if (loop_counter % 1000 == 0) {
+              APP_SERIAL.print("-");
+      }
+
+      // No credentials — start the captive portal (one-shot, guarded by setup_phase_portal).
+      APP_SERIAL.println("[Loop Setup] Phase 0: Starting captive portal");
+      wifi_config_start_portal();
       return;
     }
 
+    // Portal is running; wait for user to save credentials (which reboots).
+    // If setup_phase_portal is true but the device somehow got here without
+    // credentials, keep serving the portal.
+    if (!setup_phase_portal && wifi_config_ssid()[0] == '\0') {
+      if (loop_counter % 1000 == 0) {
+              APP_SERIAL.print("=");
+      }
+
+      // Must process web server + display while portal is active,
+      // otherwise the captive portal never handles client connections
+      // and the display never updates.
+      wifi_config_loop();
+      return;
+    }
+
+    // Credentials now exist — proceed to Phase 1.
     if (!setup_phase_wifi) {
       // Phase 1: Connect WiFi using provisioned credentials.
       APP_SERIAL.println("[Loop Setup] Phase 1: WiFi connect");
 
       if (wifi_config_connect()) {
         sync_time();
+        setup_phase_wifi = true;
       } else {
         DBG_PRINTLN("[Setup] WiFi connect failed — will retry in loop");
-        return
+        return;
       }
-      
-      return;
     }
 
     if (!setup_phase_ota) {
@@ -1097,6 +1113,11 @@ void loop() {
       claude_ws_client.onMessage(claude_ws_on_message);
       claude_ws_client.onEvent(claude_ws_on_event);
       claude_ws_connect();
+
+      // Show boot instruction on screen
+      display.showBootInstructions("Press button to start a conversation.");
+      request_display_line2("");
+
       setup_phase_ws = true;
       setup_complete = true;
     }
