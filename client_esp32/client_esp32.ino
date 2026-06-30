@@ -16,6 +16,7 @@
 
 #include "client_esp32.h"
 #include "board_pins.h"
+#include "wifi_config.h"
 #include <esp_heap_caps.h>
 #include "driver_audio_input.h"
 #include "driver_audio_output.h"
@@ -23,6 +24,9 @@
 #include <ArduinoWebsockets.h>
 #include <mbedtls/base64.h>
 #include <time.h>
+
+// Wi-Fi Portal
+#include <TinyPortal.h>
 
 // ArduinoOTA
 #include <WiFi.h>
@@ -359,6 +363,7 @@ void play_backend_audio_base64(const String &b64_audio) {
 #ifdef BOARD_AIPI_LITE
   digitalWrite(SPEAKER_AMP_ENABLE, HIGH);  // Enable speaker amp
   delay(10);  // Brief delay for amp to stabilize
+  audio_input_init_mclk(AUDIO_INPUT_MCLK, AUDIO_INPUT_BCLK, AUDIO_INPUT_LRCLK, AUDIO_INPUT_DIN);
 #endif
   // =====================================================
 
@@ -679,6 +684,14 @@ bool claude_ws_send_vad_config(float energy_threshold) {
 // Track last debounced button state to detect edges
 int last_button_state_for_toggle = Button::KEY_STATE_IDLE;
 
+// ---- setup phase flags (processed in loop()) ---------------------
+static bool setup_phase_portal = false;
+static bool setup_phase_wifi   = false;
+static bool setup_phase_ota    = false;
+static bool setup_phase_debug  = false;
+static bool setup_phase_ws     = false;
+static bool setup_complete     = false;
+
 // Setup function to initialize the hardware and software components
 void setup() {
   // ============ AIPI-Lite Power Management (CRITICAL) ============
@@ -772,42 +785,23 @@ void setup() {
     APP_SERIAL.println("[Setup] Warning: failed to create websocket mutex");
   }
 
-  // Connect to WiFi (used for HTTP requests)
-  wifi_connect();
+  // Load WiFi credentials from NVS (or sets flag to enter captive portal).
+  // If no credentials exist, the captive portal is started in the loop-based
+  // setup phase (after the WiFi stack is initialized).
+  APP_SERIAL.println("[Setup] Starting WiFi configuration...");
+  wifi_config_init();
 
-  // Setup ArduinoOTA after WiFi is connected (requires mDNS for IDE network ports)
-  if (WiFi.status() != WL_CONNECTED) {
-    APP_SERIAL.println("[Setup] OTA skipped: WiFi not connected");
+  // Jon
+  setup_complete = true;
+  
+  // Transition to loop-based setup phase.
+  if (wifi_config_ssid()[0] != '\0') {
+    // Credentials found — proceed to connect WiFi.
+    setup_phase_wifi = true;
   } else {
-    ArduinoOTA.setHostname(DEVICE_HOSTNAME);
-    ArduinoOTA
-    .onStart([]() {
-       APP_SERIAL.println("[Setup] OTA Start");
-       abort_conversation_and_return_idle(true);
-     })
-    .onEnd([]() { APP_SERIAL.println("\n[Setup] OTA End"); })
-    .onError([](ota_error_t error) {
-      APP_SERIAL.printf("[Setup] OTA Error[%u]\n", error);
-    });
-
-    ArduinoOTA.begin();
-    MDNS.addService("telnet", "tcp", 23);
-    APP_SERIAL.printf("[Setup] OTA ready at %s.local (%s)\n",
-                      DEVICE_HOSTNAME, WiFi.localIP().toString().c_str());
+    // No credentials — enter captive portal in the setup phase.
+    setup_phase_portal = true;
   }
-
-  // Start RemoteDebug only after WiFi stack init/connect to avoid lwIP mbox assert.
-  Debug.begin(DEVICE_HOSTNAME);
-  Debug.setResetCmdEnabled(true);
-  Debug.showProfiler(true);
-
-  // Configure websocket callbacks and connect to claude-voice backend.
-  claude_ws_client.onMessage(claude_ws_on_message);
-  claude_ws_client.onEvent(claude_ws_on_event);
-  claude_ws_connect();
-
-  DBG_PRINTLN("[Setup] RemoteDebug ready");
-  DBG_PRINTLN("[Setup] Serial commands: (w)s reconnect WS, (i)p info\n");
 }
 
 /* Main recording task loop */
@@ -1020,8 +1014,91 @@ void loop_task_button_handler(void *pvParameters) {
 // Main loop function that runs continuously
 int loop_counter = 0;
 void loop() {
+   // ---- One-time setup phases (run after loop() first enters) -------
+  if (!setup_complete) {
+    // Phase 0: Start captive portal if no credentials in NVS.
+    APP_SERIAL.println("[Loop Setup] Phase 0: Captive portal check");
+    if (!setup_phase_portal) {
+      wifi_config_start_portal();
+      setup_phase_portal = true;
+
+      // Skip remaining setup — device waits for user to provision WiFi.
+      return;
+    }
+
+    // Phase 1: Connect WiFi using provisioned credentials.
+    APP_SERIAL.println("[Loop Setup] Phase 1: WiFi connect");
+    if (!setup_phase_wifi) {
+      if (wifi_config_connect()) {
+        sync_time();
+      } else {
+        DBG_PRINTLN("[Setup] WiFi connect failed — will retry in loop");
+      }
+      setup_phase_wifi = true;
+      return;
+    }
+
+    // Phase 2: ArduinoOTA + mDNS (requires WiFi connected).
+    APP_SERIAL.println("[Loop Setup] Phase 2: ArduinoOTA + mDNS");
+    if (!setup_phase_ota) {
+      if (WiFi.status() == WL_CONNECTED) {
+        if (!MDNS.begin(DEVICE_HOSTNAME)) {
+          Serial.println("Error setting up MDNS responder!");
+        }
+        MDNS.addService("_http", "_tcp", 80);
+
+        ArduinoOTA.setHostname(DEVICE_HOSTNAME);
+        ArduinoOTA
+        .onStart([]() {
+           APP_SERIAL.println("[Setup] OTA Start");
+           abort_conversation_and_return_idle(true);
+         })
+        .onEnd([]() { APP_SERIAL.println("\n[Setup] OTA End"); })
+        .onError([](ota_error_t error) {
+          APP_SERIAL.printf("[Setup] OTA Error[%u]\n", error);
+        });
+
+        ArduinoOTA.begin();
+        MDNS.addService("telnet", "tcp", 23);
+        APP_SERIAL.printf("[Setup] OTA ready at %s.local (%s)\n",
+                          DEVICE_HOSTNAME, WiFi.localIP().toString().c_str());
+        setup_phase_ota = true;
+        return;
+      } else {
+        APP_SERIAL.println("[Setup] OTA skipped: WiFi not connected");
+        return;
+      }
+    }
+
+    // Phase 3: RemoteDebug (requires WiFi stack init).
+    if (!setup_phase_debug) {
+      APP_SERIAL.println("[Loop Setup] Phase 3: RemoteDebug");
+      Debug.begin(DEVICE_HOSTNAME);
+      Debug.setResetCmdEnabled(true);
+      Debug.showProfiler(true);
+      DBG_PRINTLN("[Setup] RemoteDebug ready");
+      DBG_PRINTLN("[Setup] Serial commands: (w)s reconnect WS, (i)p info\n");
+      setup_phase_debug = true;
+      return;
+    }
+
+    // Phase 4: WebSocket callbacks + connect.
+    if (!setup_phase_ws) {
+      APP_SERIAL.println("[Loop Setup] Phase 4: WebSocket callbacks + connect");
+      claude_ws_client.onMessage(claude_ws_on_message);
+      claude_ws_client.onEvent(claude_ws_on_event);
+      claude_ws_connect();
+      setup_phase_ws = true;
+      setup_complete = true;
+    }
+  }
+  // ------------------------------------------------------------------
+
   // oTA
   ArduinoOTA.handle();
+
+  // Process captive portal DNS hijack + web requests (no-op when not in portal mode)
+  wifi_config_loop();
 
   // Apply any pending display requests from background tasks
   // loop_counter++;
