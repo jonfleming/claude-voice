@@ -15,3 +15,4 @@ void handle_button_events();
 void loop_task_play_handle(void *pvParameters);
 void play_backend_audio_base64(const String &audio_b64);
 void handle_claude_ws_json(const String &json);
+void portal_saved();

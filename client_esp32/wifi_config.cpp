@@ -29,6 +29,7 @@
 #include <TinyPortal.h>
 
 #include "client_esp32.h"
+#include "sketch_config.h"
 
 // Board-specific Serial (matches client_esp32.ino)
 #ifdef BOARD_AIPI_LITE
@@ -173,9 +174,6 @@ static void stop_captive_portal() {
 void wifi_config_init() {
   WIFI_DBG_LN("[WiFi] wifi_config_init: reading NVS...");
 
-  // Jon
-  return;
-
   get_prefs().begin("wifi", true);  // read-only
 
   char tmp_ssid[64]    = {0};
@@ -188,6 +186,7 @@ void wifi_config_init() {
   // If NVS has no SSID, the caller must enter captive portal mode.
   _needs_portal = (tmp_ssid[0] == '\0');
 
+  WIFI_DBG_LN("[WiFi] wifi_config_init: ssid='" + String(tmp_ssid) + "' password='" + String(tmp_pass) + "' portal=" + String(_needs_portal));
   if (_needs_portal) {
     // Clear the buffers so wifi_config_connect() knows no credentials exist.
     stored_ssid[0]    = '\0';
@@ -195,6 +194,7 @@ void wifi_config_init() {
     WIFI_DBG_LN("[WiFi] wifi_config_init: no credentials in NVS — portal required");
   } else {
     WIFI_DBG_PRINTF("[WiFi] wifi_config_init: loaded SSID='%s'\r\n", tmp_ssid);
+    void portal_saved();
   }
 }
 
@@ -272,7 +272,7 @@ void wifi_config_enter_portal() {
   request_display_line1("WiFi Setup");
   request_display_line2("Enter new credentials");
 
-  start_captive_portal("claude-voice-setup");
+  start_captive_portal("voice-setup");
 }
 
 /**
@@ -282,7 +282,7 @@ void wifi_config_enter_portal() {
 void wifi_config_start_portal() {
   WIFI_DBG_LN("[WiFi] wifi_config_start_portal: starting...");
   WIFI_DBG_LN("[WiFi] wifi_config_start_portal: about to call start_captive_portal");
-  start_captive_portal("claude-voice-setup");
+  start_captive_portal("voice-setup");
   WIFI_DBG_LN("[WiFi] wifi_config_start_portal: done");
 }
 

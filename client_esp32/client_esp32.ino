@@ -790,9 +790,8 @@ void setup() {
   // setup phase (after the WiFi stack is initialized).
   APP_SERIAL.println("[Setup] Starting WiFi configuration...");
   wifi_config_init();
+  APP_SERIAL.println("[Setup] WiFi configuration initialized");
 
-  // Jon
-  setup_complete = true;
   
   // Transition to loop-based setup phase.
   if (wifi_config_ssid()[0] != '\0') {
@@ -1011,37 +1010,47 @@ void loop_task_button_handler(void *pvParameters) {
   }
 }
 
+void portal_saved() {
+  setup_phase_portal = true;
+}
+
 // Main loop function that runs continuously
 int loop_counter = 0;
 void loop() {
-   // ---- One-time setup phases (run after loop() first enters) -------
-  if (!setup_complete) {
-    // Phase 0: Start captive portal if no credentials in NVS.
+  // ---- One-time setup phases (run after loop() first enters) -------
+  if (loop_counter == 0) {
     APP_SERIAL.println("[Loop Setup] Phase 0: Captive portal check");
-    if (!setup_phase_portal) {
-      wifi_config_start_portal();
-      setup_phase_portal = true;
+    wifi_config_start_portal();
+  }
 
+  if (!setup_complete) {
+    // Phase 0: Start captive portal if no credentials in NVS.    
+    if (!setup_phase_portal) {
+      
       // Skip remaining setup — device waits for user to provision WiFi.
+      APP_SERIAL.print("=");
       return;
     }
 
-    // Phase 1: Connect WiFi using provisioned credentials.
-    APP_SERIAL.println("[Loop Setup] Phase 1: WiFi connect");
     if (!setup_phase_wifi) {
+      // Phase 1: Connect WiFi using provisioned credentials.
+      APP_SERIAL.println("[Loop Setup] Phase 1: WiFi connect");
+
       if (wifi_config_connect()) {
         sync_time();
       } else {
         DBG_PRINTLN("[Setup] WiFi connect failed — will retry in loop");
+        return
       }
-      setup_phase_wifi = true;
+      
       return;
     }
 
-    // Phase 2: ArduinoOTA + mDNS (requires WiFi connected).
-    APP_SERIAL.println("[Loop Setup] Phase 2: ArduinoOTA + mDNS");
     if (!setup_phase_ota) {
       if (WiFi.status() == WL_CONNECTED) {
+        // Phase 2: ArduinoOTA + mDNS (requires WiFi connected).
+        APP_SERIAL.println("[Loop Setup] Phase 2: ArduinoOTA + mDNS");
+
         if (!MDNS.begin(DEVICE_HOSTNAME)) {
           Serial.println("Error setting up MDNS responder!");
         }
