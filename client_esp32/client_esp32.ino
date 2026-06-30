@@ -781,7 +781,8 @@ void setup() {
   if (!ws_mutex) {
     APP_SERIAL.println("[Setup] Warning: failed to create websocket mutex");
   }
-
+  APP_SERIAL.println("[Setup] mutex initialized");
+  
   // Load WiFi credentials from NVS (or sets flag to enter captive portal).
   // If no credentials exist, the captive portal is started in the loop-based
   // setup phase (after the WiFi stack is initialized).
@@ -1011,6 +1012,64 @@ void loop_task_button_handler(void *pvParameters) {
   }
 }
 
+void update_display() {
+  // Apply any pending display requests from background tasks
+  // loop_counter++;
+  // if (loop_counter % 10 == 0) {
+  //   Serial.println("[Loop] Running main loop tasks..."); // Debug print every 10 loops
+  // }
+  // Boot-show/hide must be processed BEFORE line updates so that line labels
+  // are positioned correctly (top-aligned vs. below-banner) from the moment
+  // they are first created.
+  if (display_boot_show_pending) {
+    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
+    char tmp3[128];
+    strncpy(tmp3, display_boot_buf, sizeof(tmp3));
+    display_boot_show_pending = false;
+    if (display_mutex) xSemaphoreGive(display_mutex);
+    display.showBootInstructions(tmp3);
+  } else if (display_boot_hide_pending) {
+    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
+    display_boot_hide_pending = false;
+    if (display_mutex) xSemaphoreGive(display_mutex);
+    display.hideBootInstructions();
+  }
+  if (display_line1_pending) {
+    DBG_PRINTF("[Loop] line1: %s\n", display_line1_buf);
+    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
+    char tmp[128];
+    strncpy(tmp, display_line1_buf, sizeof(tmp)-1);
+    tmp[sizeof(tmp)-1] = '\0';
+    if (display_line1_next_pending) {
+      strncpy(display_line1_buf, display_line1_next_buf, sizeof(display_line1_buf)-1);
+      display_line1_buf[sizeof(display_line1_buf)-1] = '\0';
+      display_line1_next_pending = false;
+      display_line1_pending = true;
+    } else {
+      display_line1_pending = false;
+    }
+    if (display_mutex) xSemaphoreGive(display_mutex);
+    display.displayLine1(tmp);
+  }
+  if (display_line2_pending) {
+    DBG_PRINTF("[Loop] line2: %s\n", display_line2_buf);
+    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
+    char tmp2[128];
+    strncpy(tmp2, display_line2_buf, sizeof(tmp2));
+    display_line2_pending = false;
+    if (display_mutex) xSemaphoreGive(display_mutex);
+    display.displayLine2(tmp2);
+  }
+  if (display_clear_pending) {
+    DBG_PRINTF("[Loop] line1: clear pending\n");
+    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
+    display_clear_pending = false;
+    if (display_mutex) xSemaphoreGive(display_mutex);
+    display.clearLines();
+  }
+  display.routine(); 
+}
+
 void portal_saved() {
   setup_phase1_saved = true;  
 }
@@ -1019,7 +1078,7 @@ void portal_saved() {
 int loop_counter = 0;
 
 void loop() {
-  display.routine();
+  update_display();
 
   // ---- One-time setup phases (run after loop() first enters) -------
   if (!setup_complete) {
@@ -1134,62 +1193,6 @@ void loop() {
 
   // Process captive portal DNS hijack + web requests (no-op when not in portal mode)
   wifi_config_loop();
-
-  // Apply any pending display requests from background tasks
-  // loop_counter++;
-  // if (loop_counter % 10 == 0) {
-  //   Serial.println("[Loop] Running main loop tasks..."); // Debug print every 10 loops
-  // }
-  // Boot-show/hide must be processed BEFORE line updates so that line labels
-  // are positioned correctly (top-aligned vs. below-banner) from the moment
-  // they are first created.
-  if (display_boot_show_pending) {
-    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
-    char tmp3[128];
-    strncpy(tmp3, display_boot_buf, sizeof(tmp3));
-    display_boot_show_pending = false;
-    if (display_mutex) xSemaphoreGive(display_mutex);
-    display.showBootInstructions(tmp3);
-  } else if (display_boot_hide_pending) {
-    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
-    display_boot_hide_pending = false;
-    if (display_mutex) xSemaphoreGive(display_mutex);
-    display.hideBootInstructions();
-  }
-  if (display_line1_pending) {
-    DBG_PRINTF("[Loop] line1: %s\n", display_line1_buf);
-    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
-    char tmp[128];
-    strncpy(tmp, display_line1_buf, sizeof(tmp)-1);
-    tmp[sizeof(tmp)-1] = '\0';
-    if (display_line1_next_pending) {
-      strncpy(display_line1_buf, display_line1_next_buf, sizeof(display_line1_buf)-1);
-      display_line1_buf[sizeof(display_line1_buf)-1] = '\0';
-      display_line1_next_pending = false;
-      display_line1_pending = true;
-    } else {
-      display_line1_pending = false;
-    }
-    if (display_mutex) xSemaphoreGive(display_mutex);
-    display.displayLine1(tmp);
-  }
-  if (display_line2_pending) {
-    DBG_PRINTF("[Loop] line2: %s\n", display_line2_buf);
-    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
-    char tmp2[128];
-    strncpy(tmp2, display_line2_buf, sizeof(tmp2));
-    display_line2_pending = false;
-    if (display_mutex) xSemaphoreGive(display_mutex);
-    display.displayLine2(tmp2);
-  }
-  if (display_clear_pending) {
-    DBG_PRINTF("[Loop] line1: clear pending\n");
-    if (display_mutex) xSemaphoreTake(display_mutex, portMAX_DELAY);
-    display_clear_pending = false;
-    if (display_mutex) xSemaphoreGive(display_mutex);
-    display.clearLines();
-  }
-  display.routine(); 
 
   // Keep UI/state in response mode until backend confirms all audio is done.
   if (resume_recorder_after_response && !button_abort && conversation_active) {
