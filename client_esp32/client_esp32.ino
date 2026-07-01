@@ -782,7 +782,7 @@ void setup() {
     APP_SERIAL.println("[Setup] Warning: failed to create websocket mutex");
   }
   APP_SERIAL.println("[Setup] mutex initialized");
-  
+
   // Load WiFi credentials from NVS (or sets flag to enter captive portal).
   // If no credentials exist, the captive portal is started in the loop-based
   // setup phase (after the WiFi stack is initialized).
@@ -1074,6 +1074,19 @@ void portal_saved() {
   setup_phase1_saved = true;  
 }
 
+// Reset phases so loop() re-enters Phase 0
+void reset_wifi() {
+  setup_phase0_portal = false;
+  setup_phase1_saved = false;
+  setup_phase2_wifi = false;
+  setup_phase3_ota = false;
+  setup_phase4_debug = false;
+  setup_phase5_ws = false;
+  setup_complete = false;
+
+  wifi_clear_ssid();
+}
+
 // Main loop function that runs continuously
 int loop_counter = 0;
 
@@ -1084,10 +1097,6 @@ void loop() {
   if (!setup_complete) {
     // Phase 0: Start captive portal if no credentials in NVS.
     if (!setup_phase0_portal) {
-      if (loop_counter % 5000 == 0) {
-              APP_SERIAL.print("-");
-      }
-
       // No credentials — start the captive portal (one-shot, guarded by setup_phase0_portal).
       APP_SERIAL.println("[Loop Setup] Phase 0: Starting captive portal");
       wifi_config_start_portal();
@@ -1120,8 +1129,9 @@ void loop() {
       if (wifi_config_connect()) {
         sync_time();
         setup_phase2_wifi = true;
-      } else {
-        DBG_PRINTLN("[Setup] WiFi connect failed — will retry in loop");
+      } else {        
+        DBG_PRINTLN("[Setup] WiFi connect failed — enter portal mode");
+        reset_wifi();
         return;
       }
     }
@@ -1255,9 +1265,6 @@ void loop() {
     } else if (input == "wifi") {
       // Enter captive portal for WiFi configuration
       DBG_PRINTLN("[Loop] Entering WiFi configuration portal...");
-      setup_phase0_portal = false;
-      setup_phase1_saved = false;
-      setup_complete = false;
       // Stop any ongoing conversation
       if (conversation_active) {
         abort_conversation_and_return_idle(false);
@@ -1266,46 +1273,13 @@ void loop() {
       if (claude_ws_connected) {
         claude_ws_connected = false;
       }
-      // Reset phases so loop() re-enters Phase 0
-      setup_phase2_wifi = false;
-      setup_phase3_ota = false;
-      setup_phase4_debug = false;
-      setup_phase5_ws = false;
+
+      reset_wifi();
       return;
     }
   }
   // Delay for 10 milliseconds
   delay(10);
-}
-
-// Connect to WiFi with simple retry logic
-void wifi_connect() {
-  APP_SERIAL.printf("[WiFi] Connecting to WiFi SSID: %s\r\n", WIFI_SSID);
-  WiFi.mode(WIFI_STA);
-  WiFi.setHostname(DEVICE_HOSTNAME);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  if (!MDNS.begin(DEVICE_HOSTNAME)) {
-    Serial.println("Error setting up MDNS responder!");
-  }
-  MDNS.addService("_http", "_tcp", 80);  // Critical for persistence
-
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    APP_SERIAL.print(".");
-    if (millis() - start > 20000) {
-      APP_SERIAL.println("\n[WiFi] WiFi connect timeout");
-      return;
-    }
-  }
-  APP_SERIAL.println("\n[WiFi] WiFi connected");
-  APP_SERIAL.print("[WiFi] IP address: ");
-  APP_SERIAL.println(WiFi.localIP());
-  // Power save can drop mDNS responses; OTA discovery needs reliable WiFi timing.
-  WiFi.setSleep(false);
-  sync_time();
-  // Give the network stack a moment to stabilize
-  delay(1000);
 }
 
 // Simple HTTP GET to the server root for a connectivity test

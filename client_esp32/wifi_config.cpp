@@ -90,14 +90,21 @@ bool wifi_config_add_network(const char* ssid, const char* password) {
 
   // Check if SSID already exists
   int count = get_prefs().getInt("count", 0);
-  for (int i = 0; i < count; i++) {
-    String existing = get_prefs().getString(String("ssid_" + String(i)).c_str(), "", 64);
+
+  for (int i = 0; i < count; ++i) {
+    String key = "ssid_" + String(i);
+
+    // Buffer to hold the SSID, 64 bytes max
+    char ssidBuf[65] = {0};           // one byte for NUL terminator
+    size_t len = get_prefs().getString(key.c_str(), ssidBuf, sizeof(ssidBuf));
+
+    String existing(ssidBuf);          // convert buffer to Arduino String
+
     if (existing == ssid) {
-      // Update password for existing entry
-      get_prefs().putString(String("pass_" + String(i)).c_str(), password);
-      get_prefs().putString("last_saved", ssid);
-      get_prefs().end();
-      return true;
+        get_prefs().putString(("pass_" + String(i)).c_str(), password);
+        get_prefs().putString("last_saved", ssid);
+        get_prefs().end();
+        return true;
     }
   }
 
@@ -125,36 +132,55 @@ bool wifi_config_delete_network(const char* ssid) {
 
   int count = get_prefs().getInt("count", 0);
   int found = -1;
-  for (int i = 0; i < count; i++) {
-    String existing = get_prefs().getString(String("ssid_" + String(i)).c_str(), "", 64);
+
+  for (int i = 0; i < count; ++i) {
+    String key = "ssid_" + String(i);
+
+    // Buffer to hold the SSID, 64 bytes max
+    char ssidBuf[65] = {0};           // one byte for NUL terminator
+    size_t len = get_prefs().getString(key.c_str(), ssidBuf, sizeof(ssidBuf));
+
+    String existing(ssidBuf);         // convert buffer to Arduino String
     if (existing == ssid) {
-      found = i;
-      break;
+        found = i;
+        break;
     }
-  }
 
-  if (found < 0) {
+    if (found < 0) {
+      get_prefs().end();
+      return false;
+    }
+
+    for (int i = found; i < count - 1; i++) {
+      String ssid_key = "ssid_" + String(i);
+      String pass_key = "pass_" + String(i);
+      String ssid_next_key = "ssid_" + String(i + 1);
+      String pass_next_key = "pass_" + String(i + 1);
+
+      // Buffer to hold the SSID and password, 64 bytes max
+      char ssidBuf[65] = {0};           // one byte for NUL terminator
+      char passBuf[65] = {0};           // one byte for NUL terminator
+
+      // Remove the entry by shifting subsequent entries down
+      get_prefs().getString(ssid_next_key.c_str(), ssidBuf, sizeof(ssidBuf));
+      get_prefs().getString(pass_next_key.c_str(), passBuf, sizeof(passBuf));
+      get_prefs().putString(("ssid_" + String(i)).c_str(), ssidBuf);
+      get_prefs().putString(("pass_" + String(i)).c_str(), passBuf);
+    }
+
+    get_prefs().putInt("count", count - 1);
+
+    // Clear the last_saved if it was the deleted network
+    char lastBuf[65] = {0};
+    get_prefs().getString("last_saved", lastBuf, sizeof(lastBuf));
+    String last(lastBuf);             // convert buffer to Arduino String
+    if (last == ssid) {
+      get_prefs().putString("last_saved", "");
+    }
+
     get_prefs().end();
-    return false;
   }
 
-  // Remove the entry by shifting subsequent entries down
-  for (int i = found; i < count - 1; i++) {
-    String next_ssid = get_prefs().getString(String("ssid_" + String(i + 1)).c_str(), "", 64);
-    String next_pass = get_prefs().getString(String("pass_" + String(i + 1)).c_str(), "", 64);
-    get_prefs().putString(String("ssid_" + String(i)).c_str(), next_ssid);
-    get_prefs().putString(String("pass_" + String(i)).c_str(), next_pass);
-  }
-
-  get_prefs().putInt("count", count - 1);
-
-  // Clear the last_saved if it was the deleted network
-  String last = get_prefs().getString("last_saved", "", 64);
-  if (last == ssid) {
-    get_prefs().putString("last_saved", "");
-  }
-
-  get_prefs().end();
   return true;
 }
 
@@ -168,8 +194,15 @@ int wifi_config_get_saved_networks(char out_ssid[][64], int max_networks) {
   int count = get_prefs().getInt("count", 0);
   int out_count = 0;
 
+
   for (int i = 0; i < count && out_count < max_networks; i++) {
-    String s = get_prefs().getString(String("ssid_" + String(i)).c_str(), "", 64);
+    String key = "ssid_" + String(i);
+
+    // Buffer to hold the SSID, 64 bytes max
+    char ssidBuf[65] = {0};           // one byte for NUL terminator
+    size_t len = get_prefs().getString(key.c_str(), ssidBuf, sizeof(ssidBuf));
+    String s(ssidBuf);                // convert buffer to Arduino String
+
     if (s.length() > 0) {
       strncpy(out_ssid[out_count], s.c_str(), 63);
       out_ssid[out_count][63] = '\0';
@@ -183,7 +216,9 @@ int wifi_config_get_saved_networks(char out_ssid[][64], int max_networks) {
 
 const char* wifi_config_get_last_saved() {
   get_prefs().begin("saved_wifi", true);  // read-only
-  String last = get_prefs().getString("last_saved", "", 64);
+  char ssidBuf[65] = {0};           // one byte for NUL terminator
+  size_t len = get_prefs().getString("last_saved", ssidBuf, sizeof(ssidBuf));
+  String last(ssidBuf);             // convert buffer to Arduino String
   get_prefs().end();
 
   if (last.length() > 0) {
@@ -514,7 +549,11 @@ bool wifi_config_connect() {
     int count = get_prefs().getInt("count", 0);
     strncpy(try_pass, stored_password, sizeof(try_pass) - 1);  // fallback to stored
     for (int i = 0; i < count; i++) {
-      String existing = get_prefs().getString(String("ssid_" + String(i)).c_str(), "", 64);
+      String key = "ssid_" + String(i);
+      char ssidBuf[65] = {0};           // one byte for NUL terminator
+      size_t len = get_prefs().getString(key.c_str(), ssidBuf, sizeof(ssidBuf));
+      String existing(ssidBuf);         // convert buffer to Arduino String
+
       if (existing == last) {
         get_prefs().getString(String("pass_" + String(i)).c_str(), try_pass, sizeof(try_pass));
         break;
@@ -527,9 +566,11 @@ bool wifi_config_connect() {
     WiFi.setHostname(WIFI_HOSTNAME);
     WiFi.begin(try_ssid, try_pass);
 
+    WIFI_DBG_LN("[WiFi] wifi_config_connect: checking status...");
+
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED) {
-      WIFI_DBG(",");
+      WIFI_DBG(".");
       delay(500);
       if (millis() - start > 15000) {
         WIFI_DBG_LN("[WiFi] Last saved connection timeout");
@@ -538,6 +579,8 @@ bool wifi_config_connect() {
         break;
       }
     }
+
+    WIFI_DBG("[WiFi] wifi_config_connect: status: '%s'\r\n", WiFi.status() == WL_CONNECTED ? "connected" : "not connected");
 
     if (WiFi.status() == WL_CONNECTED) {
       WIFI_DBG("[WiFi] Connected to last saved '%s'! IP=%s\r\n", try_ssid, WiFi.localIP().toString().c_str());
@@ -550,6 +593,7 @@ bool wifi_config_connect() {
       return true;
     }
 
+    // Jon - display failure on screen
     WIFI_DBG_LN("[WiFi] Last saved connection failed, trying stored...");
   }
 
@@ -566,7 +610,7 @@ bool wifi_config_connect() {
   strncpy(try_pass, stored_password, sizeof(try_pass) - 1);
   try_pass[sizeof(try_pass) - 1] = '\0';
 
-  WIFI_DBG("[WiFi] wifi_config_connect: connecting to '%s'\r\n", try_ssid);
+  WIFI_DBG("[WiFi] wifi_config_connect: connecting to '%s' with password '%s'\r\n", try_ssid, try_pass);
   request_display_line1("Connecting to WiFi");
   request_display_line2(try_ssid);
 
@@ -577,7 +621,7 @@ bool wifi_config_connect() {
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
-    WIFI_DBG(",");
+    WIFI_DBG("+");
     delay(500);
     if (millis() - start > 20000) {
       WIFI_DBG_LN("[WiFi] wifi_config_connect: timeout");
@@ -605,6 +649,14 @@ const char* wifi_config_ssid() {
 }
 
 /**
+ * Clears current SSID to force portal mode.
+ */
+void wifi_clear_ssid() {
+  stored_ssid[0]    = '\0';
+  stored_password[0] = '\0';  
+}
+
+/**
  * Return pointer to the currently loaded password string (never null).
  */
 const char* wifi_config_password() {
@@ -616,7 +668,7 @@ const char* wifi_config_password() {
  * Useful when invoked from a serial command or button combo so the user
  * can change credentials at any time without reflashing.
  */
-void wifi_config_enter_portal() {
+void wifi_config_enter_portal(String ssid) {
   // Stop any existing portal/AP first
   web_server.stop();
   WiFi.softAPdisconnect(true);
@@ -627,7 +679,7 @@ void wifi_config_enter_portal() {
   request_display_line1("WiFi Setup");
   request_display_line2("Enter new credentials");
 
-  start_captive_portal("voice-setup");
+  start_captive_portal(ssid.c_str());
 }
 
 /**
@@ -636,8 +688,8 @@ void wifi_config_enter_portal() {
  */
 void wifi_config_start_portal() {
   WIFI_DBG_LN("[WiFi] wifi_config_start_portal: starting...");
-  WIFI_DBG_LN("[WiFi] wifi_config_start_portal: about to call start_captive_portal");
-  start_captive_portal("voice-setup");
+  WIFI_DBG_LN("[WiFi] wifi_config_start_portal: about to call wifi_config_enter_portal");
+  wifi_config_enter_portal("voice-setup");
   WIFI_DBG_LN("[WiFi] wifi_config_start_portal: done");
 }
 

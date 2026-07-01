@@ -6,6 +6,7 @@
 // Initialize the WiFi config module (call once from setup()).
 // Loads credentials from NVS or enters captive portal if none saved.
 void wifi_config_init();
+void wifi_clear_ssid();
 
 // Attempt to connect to the configured network with retry timeout.
 // Returns true on success; blocks until connected or timed out.
