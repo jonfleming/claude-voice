@@ -18,6 +18,12 @@
  *    4. The serial "wifi" command (handled in client_esp32.ino) forces re-entry
  *       into the portal at any time.
  *
+ *  Saved networks:
+ *    - Up to 8 networks stored in NVS under namespace "saved_wifi".
+ *    - Last-used SSID stored under "last_saved" key.
+ *    - Portal HTML shows available APs (scanned) and saved networks (selectable).
+ *    - When connecting, tries last_saved first, falls back to stored_ssid.
+ *
  *  Note: TinyPortal does NOT manage WiFi — we call WiFi.softAP() manually.
  *  TinyPortal does NOT have a stop() method — we disconnect AP manually.
  */
@@ -67,6 +73,133 @@ static char stored_password[64]= {0};
 // stack is initialized (in loop-based setup phase).
 static bool _needs_portal = false;
 
+// Last-used SSID (for auto-retry on boot)
+static char last_saved_ssid[64] = {0};
+
+// ---- Saved networks list (NVS) -----------------------------------
+
+static const int MAX_SAVED_NETWORKS = 8;
+
+/**
+ * Save a network to the NVS saved networks list.
+ * If the SSID already exists, its password is updated.
+ * Returns true on success.
+ */
+bool wifi_config_add_network(const char* ssid, const char* password) {
+  get_prefs().begin("saved_wifi", false);  // read-write
+
+  // Check if SSID already exists
+  int count = get_prefs().getInt("count", 0);
+  for (int i = 0; i < count; i++) {
+    String existing = get_prefs().getString(String("ssid_" + String(i)).c_str(), "", 64);
+    if (existing == ssid) {
+      // Update password for existing entry
+      get_prefs().putString(String("pass_" + String(i)).c_str(), password);
+      get_prefs().putString("last_saved", ssid);
+      get_prefs().end();
+      return true;
+    }
+  }
+
+  // Add new entry if we have room
+  if (count < MAX_SAVED_NETWORKS) {
+    String idx_str = String(count);
+    get_prefs().putString(String("ssid_" + idx_str).c_str(), ssid);
+    get_prefs().putString(String("pass_" + idx_str).c_str(), password);
+    get_prefs().putInt("count", count + 1);
+    get_prefs().putString("last_saved", ssid);
+    get_prefs().end();
+    return true;
+  }
+
+  get_prefs().end();
+  return false;  // list full
+}
+
+/**
+ * Delete a network from the saved list by SSID.
+ * Returns true if found and deleted.
+ */
+bool wifi_config_delete_network(const char* ssid) {
+  get_prefs().begin("saved_wifi", false);  // read-write
+
+  int count = get_prefs().getInt("count", 0);
+  int found = -1;
+  for (int i = 0; i < count; i++) {
+    String existing = get_prefs().getString(String("ssid_" + String(i)).c_str(), "", 64);
+    if (existing == ssid) {
+      found = i;
+      break;
+    }
+  }
+
+  if (found < 0) {
+    get_prefs().end();
+    return false;
+  }
+
+  // Remove the entry by shifting subsequent entries down
+  for (int i = found; i < count - 1; i++) {
+    String next_ssid = get_prefs().getString(String("ssid_" + String(i + 1)).c_str(), "", 64);
+    String next_pass = get_prefs().getString(String("pass_" + String(i + 1)).c_str(), "", 64);
+    get_prefs().putString(String("ssid_" + String(i)).c_str(), next_ssid);
+    get_prefs().putString(String("pass_" + String(i)).c_str(), next_pass);
+  }
+
+  get_prefs().putInt("count", count - 1);
+
+  // Clear the last_saved if it was the deleted network
+  String last = get_prefs().getString("last_saved", "", 64);
+  if (last == ssid) {
+    get_prefs().putString("last_saved", "");
+  }
+
+  get_prefs().end();
+  return true;
+}
+
+/**
+ * Get all saved network SSIDs into the output array.
+ * Returns the number of networks returned.
+ */
+int wifi_config_get_saved_networks(char out_ssid[][64], int max_networks) {
+  get_prefs().begin("saved_wifi", true);  // read-only
+
+  int count = get_prefs().getInt("count", 0);
+  int out_count = 0;
+
+  for (int i = 0; i < count && out_count < max_networks; i++) {
+    String s = get_prefs().getString(String("ssid_" + String(i)).c_str(), "", 64);
+    if (s.length() > 0) {
+      strncpy(out_ssid[out_count], s.c_str(), 63);
+      out_ssid[out_count][63] = '\0';
+      out_count++;
+    }
+  }
+
+  get_prefs().end();
+  return out_count;
+}
+
+const char* wifi_config_get_last_saved() {
+  get_prefs().begin("saved_wifi", true);  // read-only
+  String last = get_prefs().getString("last_saved", "", 64);
+  get_prefs().end();
+
+  if (last.length() > 0) {
+    strncpy(last_saved_ssid, last.c_str(), sizeof(last_saved_ssid) - 1);
+    last_saved_ssid[sizeof(last_saved_ssid) - 1] = '\0';
+    return last_saved_ssid;
+  }
+  return "";
+}
+
+void wifi_config_set_last_saved(const char* ssid) {
+  get_prefs().begin("saved_wifi", false);  // read-write
+  get_prefs().putString("last_saved", ssid);
+  get_prefs().end();
+}
+
 // ---- HTML form for the captive portal ----------------------------
 
 static const char portal_html[] PROGMEM = R"EOF(
@@ -77,18 +210,106 @@ static const char portal_html[] PROGMEM = R"EOF(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>WiFi Setup</title>
 <style>
-  body { font-family: sans-serif; text-align: center; padding: 40px; }
-  input { margin: 8px 0; padding: 8px; width: 260px; font-size: 16px; }
-  button { margin-top: 16px; padding: 10px 32px; font-size: 16px; }
+  body { font-family: sans-serif; text-align: center; padding: 20px; background: #f5f5f5; }
+  h2 { color: #333; }
+  .section { background: #fff; border-radius: 8px; padding: 16px; margin: 12px auto; max-width: 360px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .section h3 { margin: 0 0 10px 0; color: #555; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
+  input { margin: 6px 0; padding: 8px; width: 100%; font-size: 16px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+  button { margin-top: 8px; padding: 10px 24px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; }
+  .btn-save { background: #4CAF50; color: white; }
+  .btn-save:hover { background: #45a049; }
+  .btn-delete { background: #f44336; color: white; padding: 4px 10px; font-size: 13px; margin-left: 8px; }
+  .btn-delete:hover { background: #d32f2f; }
+  .network-list { list-style: none; padding: 0; margin: 0; }
+  .network-list li { display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #eee; }
+  .network-list li:last-child { border-bottom: none; }
+  .network-name { font-size: 15px; color: #333; }
+  .network-signal { font-size: 12px; color: #999; margin-left: 8px; }
+  .available-list li { cursor: pointer; }
+  .available-list li:hover { background: #f0f0f0; }
+  .available-list li.selected { background: #e3f2fd; }
+  .info-text { font-size: 13px; color: #777; margin: 8px 0; }
+  .divider { border: none; border-top: 1px solid #eee; margin: 16px 0; }
 </style>
 </head>
 <body>
 <h2>WiFi Setup</h2>
-<form action="/save" method="post">
-  <input name="ssid" placeholder="Network SSID" required><br>
-  <input name="password" placeholder="Password" type="password" required><br>
-  <button type="submit">Save</button>
-</form>
+
+<div class="section">
+  <h3>Saved Networks</h3>
+  <ul class="network-list" id="saved-list">
+    <li class="info-text">No saved networks</li>
+  </ul>
+</div>
+
+<hr class="divider">
+
+<div class="section">
+  <h3>Available Networks</h3>
+  <p class="info-text">Scanning...</p>
+  <ul class="network-list available-list" id="available-list">
+  </ul>
+</div>
+
+<hr class="divider">
+
+<div class="section">
+  <h3>Add New Network</h3>
+  <form action="/save" method="post">
+    <input name="ssid" placeholder="Network SSID" required>
+    <input name="password" placeholder="Password" type="password">
+    <button type="submit" class="btn-save">Save & Connect</button>
+  </form>
+</div>
+
+<script>
+// Scan results are injected by the server
+var networks = %NETWORKS_JSON%;
+var savedNetworks = %SAVED_JSON%;
+
+// Render saved networks
+var savedList = document.getElementById('saved-list');
+if (savedNetworks.length > 0) {
+  savedList.innerHTML = '';
+  savedNetworks.forEach(function(ssid) {
+    var li = document.createElement('li');
+    li.innerHTML = '<span class="network-name">' + ssid + '</span>';
+    var delBtn = document.createElement('button');
+    delBtn.className = 'btn-delete';
+    delBtn.textContent = 'Remove';
+    delBtn.onclick = function(e) {
+      e.stopPropagation();
+      if (confirm('Remove network "' + ssid + '"?')) {
+        fetch('/delete/' + encodeURIComponent(ssid), {method: 'DELETE'})
+          .then(function() { location.reload(); });
+      }
+    };
+    li.appendChild(delBtn);
+    savedList.appendChild(li);
+  });
+}
+
+// Render available networks
+var availList = document.getElementById('available-list');
+if (networks.length > 0) {
+  networks.forEach(function(n) {
+    var li = document.createElement('li');
+    var sigText = n.rssi > -50 ? 'Excellent' : n.rssi > -65 ? 'Good' : n.rssi > -75 ? 'Fair' : 'Weak';
+    li.innerHTML = '<span class="network-name">' + n.ssid + '<span class="network-signal">(' + sigText + ')</span></span>';
+    li.onclick = function() {
+      // Highlight selected
+      document.querySelectorAll('.available-list li').forEach(function(el) { el.classList.remove('selected'); });
+      li.classList.add('selected');
+      // Fill the form
+      document.querySelector('input[name="ssid"]').value = n.ssid;
+      document.querySelector('input[name="password"]').focus();
+    };
+    availList.appendChild(li);
+  });
+} else {
+  availList.innerHTML = '<li class="info-text">No networks found</li>';
+}
+</script>
 </body>
 </html>
 )EOF";
@@ -96,7 +317,42 @@ static const char portal_html[] PROGMEM = R"EOF(
 // ---- WebServer route handlers ------------------------------------
 
 void handle_portal_root() {
-  web_server.send(200, "text/html", portal_html);
+  // Scan for available networks
+  int n = WiFi.scanNetworks();
+
+  // Build networks JSON array
+  String networks_json = "[";
+  for (int i = 0; i < n; i++) {
+    if (i > 0) networks_json += ",";
+    String ssid = WiFi.SSID(i);
+    int rssi = WiFi.RSSI(i);
+    // Escape special chars in SSID for JSON
+    String escaped_ssid = "";
+    for (char c : ssid) {
+      if (c == '"') escaped_ssid += "\\\"";
+      else if (c == '\\') escaped_ssid += "\\\\";
+      else escaped_ssid += c;
+    }
+    networks_json += "{\"ssid\":\"" + escaped_ssid + "\",\"rssi\":" + String(rssi) + "}";
+  }
+  networks_json += "]";
+
+  // Build saved networks JSON array
+  char saved_ssids[MAX_SAVED_NETWORKS][64];
+  int saved_count = wifi_config_get_saved_networks(saved_ssids, MAX_SAVED_NETWORKS);
+  String saved_json = "[";
+  for (int i = 0; i < saved_count; i++) {
+    if (i > 0) saved_json += ",";
+    saved_json += "\"" + String(saved_ssids[i]) + "\"";
+  }
+  saved_json += "]";
+
+  // Replace placeholders in the HTML
+  String html = String(portal_html);
+  html.replace("%NETWORKS_JSON%", networks_json);
+  html.replace("%SAVED_JSON%", saved_json);
+
+  web_server.send(200, "text/html", html);
 }
 
 void handle_save() {
@@ -110,6 +366,10 @@ void handle_save() {
 
   ssid.toCharArray(stored_ssid, sizeof(stored_ssid));
   password.toCharArray(stored_password, sizeof(stored_password));
+
+  // Also save to the saved networks list
+  wifi_config_add_network(stored_ssid, stored_password);
+  wifi_config_set_last_saved(stored_ssid);
 
   // Persist to NVS
   get_prefs().begin("wifi", false);
@@ -125,6 +385,24 @@ void handle_save() {
   ESP.restart();
 }
 
+void handle_delete() {
+  String ssid = web_server.pathArg(0);
+  if (ssid.length() == 0) {
+    web_server.send(400, "text/plain", "Missing SSID");
+    return;
+  }
+
+  wifi_config_delete_network(ssid.c_str());
+
+  // If this was the stored credential, clear it
+  if (ssid == String(stored_ssid)) {
+    stored_ssid[0] = '\0';
+    stored_password[0] = '\0';
+  }
+
+  web_server.send(200, "text/plain", "OK");
+}
+
 void handle_not_found() {
   web_server.send(404, "text/plain", "Not Found");
 }
@@ -134,14 +412,18 @@ void handle_not_found() {
 static void start_captive_portal(const char* ap_ssid) {
   WIFI_DBG_LN("[WiFi] start_captive_portal: starting...");
 
+  // Clear stale scan results
+  WiFi.scanDelete();
+
   // Start AP
   WIFI_DBG("[WiFi] start_captive_portal: calling WiFi.softAP('%s')\r\n", ap_ssid);
   WiFi.softAP(ap_ssid);
   delay(500);
 
   // Register routes on the web server
-  web_server.on("/", handle_portal_root);
+  web_server.on("/", HTTP_GET, handle_portal_root);
   web_server.on("/save", HTTP_POST, handle_save);
+  web_server.on("/delete/{ssid}", HTTP_DELETE, handle_delete);
   web_server.onNotFound(handle_not_found);
   WIFI_DBG_LN("[WiFi] start_captive_portal: calling web_server.begin()");
   web_server.begin();
@@ -206,10 +488,72 @@ void wifi_config_init() {
 /**
  * Connect as STA using the loaded credentials.
  * Returns true on success, false on timeout.
+ *
+ * Retry logic:
+ *   1. Try last_saved_ssid first (if different from stored_ssid)
+ *   2. Fall back to stored_ssid
+ *   3. If both fail, enter portal mode
  */
 bool wifi_config_connect() {
   WIFI_DBG_LN("[WiFi] wifi_config_connect: starting...");
 
+  // Determine which SSIDs to try
+  char try_ssid[64];
+  char try_pass[64];
+
+  // Get last saved SSID
+  const char* last = wifi_config_get_last_saved();
+
+  if (last[0] != '\0' && strcmp(last, stored_ssid) != 0) {
+    // Try last saved first
+    strncpy(try_ssid, last, sizeof(try_ssid) - 1);
+    try_ssid[sizeof(try_ssid) - 1] = '\0';
+
+    // Look up password for last saved
+    get_prefs().begin("saved_wifi", true);
+    int count = get_prefs().getInt("count", 0);
+    strncpy(try_pass, stored_password, sizeof(try_pass) - 1);  // fallback to stored
+    for (int i = 0; i < count; i++) {
+      String existing = get_prefs().getString(String("ssid_" + String(i)).c_str(), "", 64);
+      if (existing == last) {
+        get_prefs().getString(String("pass_" + String(i)).c_str(), try_pass, sizeof(try_pass));
+        break;
+      }
+    }
+    get_prefs().end();
+
+    WIFI_DBG("[WiFi] Trying last saved: '%s'\r\n", try_ssid);
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(WIFI_HOSTNAME);
+    WiFi.begin(try_ssid, try_pass);
+
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED) {
+      WIFI_DBG(",");
+      delay(500);
+      if (millis() - start > 15000) {
+        WIFI_DBG_LN("[WiFi] Last saved connection timeout");
+        WiFi.disconnect();
+        delay(100);
+        break;
+      }
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      WIFI_DBG("[WiFi] Connected to last saved '%s'! IP=%s\r\n", try_ssid, WiFi.localIP().toString().c_str());
+      strncpy(stored_ssid, try_ssid, sizeof(stored_ssid) - 1);
+      strncpy(stored_password, try_pass, sizeof(stored_password) - 1);
+      WiFi.setSleep(false);
+      sync_time();
+      request_display_line1("WiFi connected");
+      request_display_line2(stored_ssid);
+      return true;
+    }
+
+    WIFI_DBG_LN("[WiFi] Last saved connection failed, trying stored...");
+  }
+
+  // Fall back to stored_ssid
   if (stored_ssid[0] == '\0') {
     WIFI_DBG_LN("[WiFi] wifi_config_connect: no SSID configured");
     request_display_line1("WiFi not configured");
@@ -217,15 +561,19 @@ bool wifi_config_connect() {
     return false;
   }
 
-  WIFI_DBG("[WiFi] wifi_config_connect: connecting to '%s'\r\n", stored_ssid);
+  strncpy(try_ssid, stored_ssid, sizeof(try_ssid) - 1);
+  try_ssid[sizeof(try_ssid) - 1] = '\0';
+  strncpy(try_pass, stored_password, sizeof(try_pass) - 1);
+  try_pass[sizeof(try_pass) - 1] = '\0';
+
+  WIFI_DBG("[WiFi] wifi_config_connect: connecting to '%s'\r\n", try_ssid);
   request_display_line1("Connecting to WiFi");
-  request_display_line2(stored_ssid);
+  request_display_line2(try_ssid);
 
   WiFi.mode(WIFI_STA);
 
-  const char* hostname = WIFI_HOSTNAME;
-  WiFi.setHostname(hostname);
-  WiFi.begin(stored_ssid, stored_password);
+  WiFi.setHostname(WIFI_HOSTNAME);
+  WiFi.begin(try_ssid, try_pass);
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
@@ -241,9 +589,10 @@ bool wifi_config_connect() {
 
   WIFI_DBG("[WiFi] wifi_config_connect: connected! IP=%s\r\n", WiFi.localIP().toString().c_str());
   request_display_line1("WiFi connected");
-  request_display_line2(WiFi.localIP().toString().c_str());
+  request_display_line2(stored_ssid);
 
   WiFi.setSleep(false);
+  sync_time();
 
   return true;
 }

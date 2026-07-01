@@ -29,4 +29,11 @@ void wifi_config_start_portal();
 // Processes DNS hijack requests and handles web server clients.
 void wifi_config_loop();
 
+// Saved networks list management
+int wifi_config_get_saved_networks(char out_ssid[][64], int max_networks);
+bool wifi_config_add_network(const char* ssid, const char* password);
+bool wifi_config_delete_network(const char* ssid);
+const char* wifi_config_get_last_saved();
+void wifi_config_set_last_saved(const char* ssid);
+
 #endif // WIFI_CONFIG_H

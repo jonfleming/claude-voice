@@ -1252,6 +1252,26 @@ void loop() {
       // Print IP info
       APP_SERIAL.print("[Loop] IP: ");
       APP_SERIAL.println(WiFi.localIP());
+    } else if (input == "wifi") {
+      // Enter captive portal for WiFi configuration
+      DBG_PRINTLN("[Loop] Entering WiFi configuration portal...");
+      setup_phase0_portal = false;
+      setup_phase1_saved = false;
+      setup_complete = false;
+      // Stop any ongoing conversation
+      if (conversation_active) {
+        abort_conversation_and_return_idle(false);
+      }
+      // Stop WebSocket
+      if (claude_ws_connected) {
+        claude_ws_connected = false;
+      }
+      // Reset phases so loop() re-enters Phase 0
+      setup_phase2_wifi = false;
+      setup_phase3_ota = false;
+      setup_phase4_debug = false;
+      setup_phase5_ws = false;
+      return;
     }
   }
   // Delay for 10 milliseconds
