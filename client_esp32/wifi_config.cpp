@@ -145,43 +145,73 @@ bool wifi_config_delete_network(const char* ssid) {
         found = i;
         break;
     }
-
-    if (found < 0) {
-      get_prefs().end();
-      return false;
-    }
-
-    for (int i = found; i < count - 1; i++) {
-      String ssid_key = "ssid_" + String(i);
-      String pass_key = "pass_" + String(i);
-      String ssid_next_key = "ssid_" + String(i + 1);
-      String pass_next_key = "pass_" + String(i + 1);
-
-      // Buffer to hold the SSID and password, 64 bytes max
-      char ssidBuf[65] = {0};           // one byte for NUL terminator
-      char passBuf[65] = {0};           // one byte for NUL terminator
-
-      // Remove the entry by shifting subsequent entries down
-      get_prefs().getString(ssid_next_key.c_str(), ssidBuf, sizeof(ssidBuf));
-      get_prefs().getString(pass_next_key.c_str(), passBuf, sizeof(passBuf));
-      get_prefs().putString(("ssid_" + String(i)).c_str(), ssidBuf);
-      get_prefs().putString(("pass_" + String(i)).c_str(), passBuf);
-    }
-
-    get_prefs().putInt("count", count - 1);
-
-    // Clear the last_saved if it was the deleted network
-    char lastBuf[65] = {0};
-    get_prefs().getString("last_saved", lastBuf, sizeof(lastBuf));
-    String last(lastBuf);             // convert buffer to Arduino String
-    if (last == ssid) {
-      get_prefs().putString("last_saved", "");
-    }
-
-    get_prefs().end();
   }
 
+  if (found < 0) {
+    get_prefs().end();
+    return false;
+  }
+
+  for (int i = found; i < count - 1; i++) {
+    String ssid_next_key = "ssid_" + String(i + 1);
+    String pass_next_key = "pass_" + String(i + 1);
+
+    // Buffer to hold the SSID and password, 64 bytes max
+    char ssidBuf[65] = {0};           // one byte for NUL terminator
+    char passBuf[65] = {0};           // one byte for NUL terminator
+
+    // Remove the entry by shifting subsequent entries down
+    get_prefs().getString(ssid_next_key.c_str(), ssidBuf, sizeof(ssidBuf));
+    get_prefs().getString(pass_next_key.c_str(), passBuf, sizeof(passBuf));
+    get_prefs().putString(("ssid_" + String(i)).c_str(), ssidBuf);
+    get_prefs().putString(("pass_" + String(i)).c_str(), passBuf);
+  }
+
+  // Remove old last entry after compaction.
+  get_prefs().remove(("ssid_" + String(count - 1)).c_str());
+  get_prefs().remove(("pass_" + String(count - 1)).c_str());
+  get_prefs().putInt("count", count - 1);
+
+  // Clear the last_saved if it was the deleted network
+  char lastBuf[65] = {0};
+  get_prefs().getString("last_saved", lastBuf, sizeof(lastBuf));
+  String last(lastBuf);             // convert buffer to Arduino String
+  if (last == ssid) {
+    get_prefs().putString("last_saved", "");
+  }
+
+  get_prefs().end();
+
   return true;
+}
+
+/**
+ * Lookup a saved password by SSID.
+ * Returns true when a matching network exists.
+ */
+bool wifi_config_get_saved_password(const char* ssid, char* out_password, size_t out_password_size) {
+  if (!ssid || !out_password || out_password_size == 0) {
+    return false;
+  }
+
+  out_password[0] = '\0';
+
+  get_prefs().begin("saved_wifi", true);  // read-only
+  int count = get_prefs().getInt("count", 0);
+
+  for (int i = 0; i < count; ++i) {
+    char ssidBuf[65] = {0};
+    get_prefs().getString(("ssid_" + String(i)).c_str(), ssidBuf, sizeof(ssidBuf));
+
+    if (String(ssidBuf) == ssid) {
+      get_prefs().getString(("pass_" + String(i)).c_str(), out_password, out_password_size);
+      get_prefs().end();
+      return true;
+    }
+  }
+
+  get_prefs().end();
+  return false;
 }
 
 /**
@@ -328,18 +358,43 @@ var deleteNo = document.getElementById('delete-no');
 var _deleteCallback = null;
 
 function showDeleteConfirm(ssid, callback) {
+  console.log('[Portal] showDeleteConfirm ssid=', ssid);
   deleteMsg.textContent = 'Remove network "' + ssid + '"?';
   _deleteCallback = callback;
   deleteOverlay.classList.add('active');
 }
 
+function useSavedNetwork(ssid) {
+  var url = '/use?ssid=' + encodeURIComponent(ssid);
+  console.log('[Portal] useSavedNetwork click ssid=', ssid, 'url=', url);
+
+  fetch(url, {method: 'POST'})
+    .then(function(resp) {
+      return resp.text().then(function(text) {
+        console.log('[Portal] useSavedNetwork response status=', resp.status, 'body=', text);
+        if (!resp.ok) {
+          alert('Failed to use saved network: ' + text);
+          return;
+        }
+
+        document.body.innerHTML = '<h2>Switching WiFi...</h2><p>Connecting to ' + ssid + ' and rebooting device.</p>';
+      });
+    })
+    .catch(function(err) {
+      console.log('[Portal] useSavedNetwork fetch error:', err);
+      alert('Network switch request failed. Check console logs.');
+    });
+}
+
 deleteYes.addEventListener('click', function() {
+  console.log('[Portal] delete overlay approved');
   deleteOverlay.classList.remove('active');
   if (_deleteCallback) _deleteCallback(true);
   _deleteCallback = null;
 });
 
 deleteNo.addEventListener('click', function() {
+  console.log('[Portal] delete overlay canceled');
   deleteOverlay.classList.remove('active');
   if (_deleteCallback) _deleteCallback(false);
   _deleteCallback = null;
@@ -366,19 +421,33 @@ if (savedNetworks.length > 0) {
     delBtn.textContent = 'Remove';
     delBtn.onclick = function(e) {
       e.stopPropagation();
+      console.log('[Portal] remove button clicked ssid=', ssid);
       showDeleteConfirm(ssid, function(approved) {
+        console.log('[Portal] remove approved=', approved, 'ssid=', ssid);
         if (!approved) return;
-        fetch('/delete?ssid=' + encodeURIComponent(ssid), {method: 'POST'})
-          .then(function() { location.reload(); });
+        var url = '/delete?ssid=' + encodeURIComponent(ssid);
+        console.log('[Portal] delete fetch url=', url);
+        fetch(url, {method: 'POST'})
+          .then(function(resp) {
+            return resp.text().then(function(text) {
+              console.log('[Portal] delete response status=', resp.status, 'body=', text);
+              if (resp.ok) {
+                location.reload();
+              } else {
+                alert('Delete failed: ' + text);
+              }
+            });
+          })
+          .catch(function(err) {
+            console.log('[Portal] delete fetch error:', err);
+            alert('Delete request failed. Check console logs.');
+          });
       });
     };
     li.style.cursor = 'pointer';
     li.onclick = function() {
-      showDeleteConfirm(ssid, function(approved) {
-        if (!approved) return;
-        fetch('/delete?ssid=' + encodeURIComponent(ssid), {method: 'POST'})
-          .then(function() { location.reload(); });
-      });
+      console.log('[Portal] saved network row clicked ssid=', ssid);
+      useSavedNetwork(ssid);
     };
     li.appendChild(delBtn);
     savedList.appendChild(li);
@@ -484,12 +553,18 @@ void handle_save() {
 
 void handle_delete() {
   String ssid = web_server.arg("ssid");
+  WIFI_DBG("[WiFi] handle_delete: uri=%s ssid='%s'\r\n", web_server.uri().c_str(), ssid.c_str());
   if (ssid.length() == 0) {
     web_server.send(400, "text/plain", "Missing SSID");
     return;
   }
 
-  wifi_config_delete_network(ssid.c_str());
+  bool deleted = wifi_config_delete_network(ssid.c_str());
+  WIFI_DBG("[WiFi] handle_delete: delete result=%s\r\n", deleted ? "true" : "false");
+  if (!deleted) {
+    web_server.send(404, "text/plain", "SSID not found");
+    return;
+  }
 
   // If this was the stored credential, clear it
   if (ssid == String(stored_ssid)) {
@@ -498,6 +573,44 @@ void handle_delete() {
   }
 
   web_server.send(200, "text/plain", "OK");
+}
+
+void handle_use_saved() {
+  String ssid = web_server.arg("ssid");
+  WIFI_DBG("[WiFi] handle_use_saved: uri=%s ssid='%s'\r\n", web_server.uri().c_str(), ssid.c_str());
+
+  if (ssid.length() == 0) {
+    web_server.send(400, "text/plain", "Missing SSID");
+    return;
+  }
+
+  char password[64] = {0};
+  bool found = wifi_config_get_saved_password(ssid.c_str(), password, sizeof(password));
+  WIFI_DBG("[WiFi] handle_use_saved: lookup=%s\r\n", found ? "true" : "false");
+
+  if (!found) {
+    web_server.send(404, "text/plain", "Saved network not found");
+    return;
+  }
+
+  ssid.toCharArray(stored_ssid, sizeof(stored_ssid));
+  strncpy(stored_password, password, sizeof(stored_password) - 1);
+  stored_password[sizeof(stored_password) - 1] = '\0';
+
+  wifi_config_set_last_saved(stored_ssid);
+
+  // Persist selected network as the active boot credential.
+  get_prefs().begin("wifi", false);
+  get_prefs().putString("ssid", stored_ssid);
+  get_prefs().putString("password", stored_password);
+  get_prefs().end();
+
+  request_display_line1("Using saved WiFi");
+  request_display_line2(stored_ssid);
+
+  web_server.send(200, "text/plain", "Switching to saved network");
+  delay(300);
+  ESP.restart();
 }
 
 void handle_not_found() {
@@ -522,6 +635,7 @@ static void start_captive_portal(const char* ap_ssid) {
   web_server.on("/", HTTP_GET, handle_portal_root);
   web_server.on("/save", HTTP_POST, handle_save);
   web_server.on("/delete", HTTP_POST, handle_delete);
+  web_server.on("/use", HTTP_POST, handle_use_saved);
   web_server.onNotFound(handle_not_found);
   WIFI_DBG_LN("[WiFi] start_captive_portal: calling web_server.begin()");
   web_server.begin();
