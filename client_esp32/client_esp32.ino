@@ -1110,7 +1110,8 @@ void loop() {
     // credentials, keep serving the portal.
     if (!setup_phase1_saved && wifi_config_ssid()[0] == '\0') {
       if (loop_counter % 5000 == 0) {
-              APP_SERIAL.print("=");
+        delay(500);
+        APP_SERIAL.print("=");
       }
       
       // Must process web server + display while portal is active,

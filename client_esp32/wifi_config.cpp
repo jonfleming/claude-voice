@@ -265,6 +265,16 @@ static const char portal_html[] PROGMEM = R"EOF(
   .available-list li.selected { background: #e3f2fd; }
   .info-text { font-size: 13px; color: #777; margin: 8px 0; }
   .divider { border: none; border-top: 1px solid #eee; margin: 16px 0; }
+  .overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+    background:rgba(0,0,0,0.4); z-index:999; justify-content:center; align-items:center; }
+  .overlay.active { display:flex; }
+  .overlay-box { background:#fff; border-radius:8px; padding:24px; max-width:300px;
+    text-align:center; box-shadow:0 2px 8px rgba(0,0,0,0.2); }
+  .overlay-box p { margin:0 0 16px 0; font-size:15px; color:#333; }
+  .overlay-box button { margin:0 6px; padding:8px 20px; font-size:15px; border:none;
+    border-radius:4px; cursor:pointer; }
+  .overlay-yes { background:#f44336; color:white; }
+  .overlay-no { background:#999; color:white; }
 </style>
 </head>
 <body>
@@ -297,10 +307,52 @@ static const char portal_html[] PROGMEM = R"EOF(
   </form>
 </div>
 
+<div id="delete-overlay" class="overlay">
+  <div class="overlay-box">
+    <p id="delete-msg">Remove this network?</p>
+    <button class="overlay-yes" id="delete-yes">Yes</button>
+    <button class="overlay-no" id="delete-no">No</button>
+  </div>
+</div>
+
 <script>
 // Scan results are injected by the server
 var networks = %NETWORKS_JSON%;
 var savedNetworks = %SAVED_JSON%;
+
+// Simple overlay-based delete confirmation (replaces confirm())
+var deleteOverlay = document.getElementById('delete-overlay');
+var deleteMsg = document.getElementById('delete-msg');
+var deleteYes = document.getElementById('delete-yes');
+var deleteNo = document.getElementById('delete-no');
+var _deleteCallback = null;
+
+function showDeleteConfirm(ssid, callback) {
+  deleteMsg.textContent = 'Remove network "' + ssid + '"?';
+  _deleteCallback = callback;
+  deleteOverlay.classList.add('active');
+}
+
+deleteYes.addEventListener('click', function() {
+  deleteOverlay.classList.remove('active');
+  if (_deleteCallback) _deleteCallback(true);
+  _deleteCallback = null;
+});
+
+deleteNo.addEventListener('click', function() {
+  deleteOverlay.classList.remove('active');
+  if (_deleteCallback) _deleteCallback(false);
+  _deleteCallback = null;
+});
+
+// Also close overlay when clicking the backdrop
+deleteOverlay.addEventListener('click', function(e) {
+  if (e.target === deleteOverlay) {
+    deleteOverlay.classList.remove('active');
+    if (_deleteCallback) _deleteCallback(false);
+    _deleteCallback = null;
+  }
+});
 
 // Render saved networks
 var savedList = document.getElementById('saved-list');
@@ -314,10 +366,19 @@ if (savedNetworks.length > 0) {
     delBtn.textContent = 'Remove';
     delBtn.onclick = function(e) {
       e.stopPropagation();
-      if (confirm('Remove network "' + ssid + '"?')) {
-        fetch('/delete/' + encodeURIComponent(ssid), {method: 'DELETE'})
+      showDeleteConfirm(ssid, function(approved) {
+        if (!approved) return;
+        fetch('/delete?ssid=' + encodeURIComponent(ssid), {method: 'POST'})
           .then(function() { location.reload(); });
-      }
+      });
+    };
+    li.style.cursor = 'pointer';
+    li.onclick = function() {
+      showDeleteConfirm(ssid, function(approved) {
+        if (!approved) return;
+        fetch('/delete?ssid=' + encodeURIComponent(ssid), {method: 'POST'})
+          .then(function() { location.reload(); });
+      });
     };
     li.appendChild(delBtn);
     savedList.appendChild(li);
@@ -391,6 +452,7 @@ void handle_portal_root() {
 }
 
 void handle_save() {
+  WIFI_DBG("[WiFi] handle_save: %s\r\n", web_server.uri().c_str());
   String ssid    = web_server.arg("ssid");
   String password = web_server.arg("password");
 
@@ -421,7 +483,7 @@ void handle_save() {
 }
 
 void handle_delete() {
-  String ssid = web_server.pathArg(0);
+  String ssid = web_server.arg("ssid");
   if (ssid.length() == 0) {
     web_server.send(400, "text/plain", "Missing SSID");
     return;
@@ -439,13 +501,14 @@ void handle_delete() {
 }
 
 void handle_not_found() {
+  WIFI_DBG("[WiFi] handle_not_found: %s\r\n", web_server.uri().c_str());
   web_server.send(404, "text/plain", "Not Found");
 }
 
 // ---- helpers to manage AP + portal lifecycle ---------------------
 
 static void start_captive_portal(const char* ap_ssid) {
-  WIFI_DBG_LN("[WiFi] start_captive_portal: starting...");
+  WIFI_DBG("[WiFi] start_captive_portal: starting on %s...\r\n", ap_ssid);
 
   // Clear stale scan results
   WiFi.scanDelete();
@@ -458,7 +521,7 @@ static void start_captive_portal(const char* ap_ssid) {
   // Register routes on the web server
   web_server.on("/", HTTP_GET, handle_portal_root);
   web_server.on("/save", HTTP_POST, handle_save);
-  web_server.on("/delete/{ssid}", HTTP_DELETE, handle_delete);
+  web_server.on("/delete", HTTP_POST, handle_delete);
   web_server.onNotFound(handle_not_found);
   WIFI_DBG_LN("[WiFi] start_captive_portal: calling web_server.begin()");
   web_server.begin();
