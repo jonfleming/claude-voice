@@ -57,3 +57,48 @@ class TestAudioBuffer:
         buf.add_silence(1.0)
         # No speech detected, should not trigger
         assert buf.check_vad() is False
+
+    def test_adaptive_threshold_raises_on_low_variance_noise(self):
+        buf = AudioBuffer(
+            energy_threshold=0.005,
+            adaptive_enabled=True,
+            adaptive_low_variance_seconds=0.5,
+            adaptive_rms_delta_threshold=0.0002,
+            adaptive_noise_margin=1.4,
+            adaptive_max_multiplier=5.0,
+            adaptive_smoothing=1.0,
+        )
+        noisy_chunk = make_pcm(0.01)
+        t = 0.0
+        for _ in range(8):
+            buf.add(noisy_chunk, t)
+            t += 0.1
+
+        assert buf.energy_threshold > buf.base_energy_threshold
+
+    def test_adaptive_threshold_returns_to_base_when_variance_increases(self):
+        buf = AudioBuffer(
+            energy_threshold=0.005,
+            adaptive_enabled=True,
+            adaptive_low_variance_seconds=0.5,
+            adaptive_rms_delta_threshold=0.0002,
+            adaptive_noise_margin=1.4,
+            adaptive_max_multiplier=5.0,
+            adaptive_smoothing=1.0,
+        )
+        t = 0.0
+        stable_chunk = make_pcm(0.01)
+        for _ in range(8):
+            buf.add(stable_chunk, t)
+            t += 0.1
+
+        raised = buf.energy_threshold
+        assert raised > buf.base_energy_threshold
+
+        for i in range(8):
+            rms = 0.01 if i % 2 == 0 else 0.03
+            buf.add(make_pcm(rms), t)
+            t += 0.1
+
+        assert buf.energy_threshold <= raised
+        assert buf.energy_threshold == pytest.approx(buf.base_energy_threshold)

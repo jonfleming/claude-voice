@@ -12,6 +12,7 @@ WebSocket server that:
 import aiohttp
 import asyncio
 import base64
+from collections import deque
 import json
 import numpy as np
 import os
@@ -47,6 +48,12 @@ VAD_ENERGY_THRESHOLD = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.005"))
 # After speech starts, require RMS >= energy_threshold * ratio to reset silence.
 # Prevents ambient noise near the threshold from repeatedly zeroing silent_duration.
 VAD_SPEECH_CONTINUE_RATIO = float(os.getenv("VAD_SPEECH_CONTINUE_RATIO", "1.5"))
+VAD_ADAPTIVE_ENABLED = os.getenv("VAD_ADAPTIVE_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+VAD_ADAPTIVE_LOW_VARIANCE_SECONDS = float(os.getenv("VAD_ADAPTIVE_LOW_VARIANCE_SECONDS", "3.0"))
+VAD_ADAPTIVE_RMS_DELTA_THRESHOLD = float(os.getenv("VAD_ADAPTIVE_RMS_DELTA_THRESHOLD", "0.0015"))
+VAD_ADAPTIVE_NOISE_MARGIN = float(os.getenv("VAD_ADAPTIVE_NOISE_MARGIN", "1.25"))
+VAD_ADAPTIVE_MAX_MULTIPLIER = float(os.getenv("VAD_ADAPTIVE_MAX_MULTIPLIER", "4.0"))
+VAD_ADAPTIVE_SMOOTHING = float(os.getenv("VAD_ADAPTIVE_SMOOTHING", "0.2"))
 WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.getenv("WS_PORT", "8080"))
 HINDSIGHT_HOST = os.getenv("HINDSIGHT_HOST", "http://100.111.132.40:8888")
@@ -522,10 +529,17 @@ class AudioBuffer:
         energy_threshold: float = 0.005,
         sample_rate: int = 16000,
         speech_continue_ratio: float = 1.5,
+        adaptive_enabled: bool = True,
+        adaptive_low_variance_seconds: float = 3.0,
+        adaptive_rms_delta_threshold: float = 0.0015,
+        adaptive_noise_margin: float = 1.25,
+        adaptive_max_multiplier: float = 4.0,
+        adaptive_smoothing: float = 0.2,
     ):
         self.buffer: list[bytes] = []
         self.vad_threshold = vad_threshold
         self.min_speech = min_speech
+        self.base_energy_threshold = max(1e-6, energy_threshold)
         self.energy_threshold = energy_threshold
         self.speech_continue_ratio = speech_continue_ratio
         self.sample_rate = sample_rate
@@ -536,6 +550,61 @@ class AudioBuffer:
         # Internal buffer for VAD windowing (ensures stable RMS on small chunks)
         self.vad_window_buffer = b""
         self.min_vad_window_bytes = int(self.sample_rate * 0.1 * 2) # 100ms
+        # Adaptive threshold state based on low-variance RMS windows.
+        self.adaptive_enabled = adaptive_enabled
+        self.adaptive_low_variance_seconds = max(0.5, adaptive_low_variance_seconds)
+        self.adaptive_rms_delta_threshold = max(1e-6, adaptive_rms_delta_threshold)
+        self.adaptive_noise_margin = max(1.0, adaptive_noise_margin)
+        self.adaptive_max_multiplier = max(1.0, adaptive_max_multiplier)
+        self.adaptive_smoothing = min(1.0, max(0.01, adaptive_smoothing))
+        self.rms_history: deque[tuple[float, float]] = deque()
+        self.last_threshold_log = self.energy_threshold
+
+    def set_energy_threshold(self, value: float):
+        """Set baseline threshold and reset effective threshold."""
+        self.base_energy_threshold = max(1e-6, value)
+        self.energy_threshold = self.base_energy_threshold
+        self.last_threshold_log = self.energy_threshold
+        self.rms_history.clear()
+
+    def _update_adaptive_energy_threshold(self, rms: float, current_time: float):
+        """Adapt threshold when RMS stays almost flat for a sustained period."""
+        if not self.adaptive_enabled:
+            return
+
+        self.rms_history.append((current_time, rms))
+        min_time = current_time - self.adaptive_low_variance_seconds
+        while self.rms_history and self.rms_history[0][0] < min_time:
+            self.rms_history.popleft()
+
+        if len(self.rms_history) < 3:
+            return
+
+        window_span = self.rms_history[-1][0] - self.rms_history[0][0]
+        if window_span < self.adaptive_low_variance_seconds * 0.9:
+            return
+
+        rms_values = [value for _, value in self.rms_history]
+        rms_min = min(rms_values)
+        rms_max = max(rms_values)
+        rms_range = rms_max - rms_min
+        rms_mean = float(np.mean(rms_values))
+
+        if rms_range <= self.adaptive_rms_delta_threshold:
+            target = max(self.base_energy_threshold, rms_mean * self.adaptive_noise_margin)
+            target = min(target, self.base_energy_threshold * self.adaptive_max_multiplier)
+        else:
+            target = self.base_energy_threshold
+
+        updated = ((1.0 - self.adaptive_smoothing) * self.energy_threshold) + (self.adaptive_smoothing * target)
+        self.energy_threshold = max(1e-6, updated)
+
+        if abs(self.energy_threshold - self.last_threshold_log) >= 0.0005:
+            log(
+                f"[VAD] Adaptive threshold update: {self.last_threshold_log:.5f} -> {self.energy_threshold:.5f} "
+                f"(base={self.base_energy_threshold:.5f}, mean_rms={rms_mean:.5f}, range={rms_range:.5f})"
+            )
+            self.last_threshold_log = self.energy_threshold
 
     def add(self, chunk: bytes, current_time: float):
         """Add audio chunk to buffer and update VAD state."""
@@ -551,6 +620,7 @@ class AudioBuffer:
             rms = get_rms(window)
             duration = len(window) / (2 * self.sample_rate)
             self._update_vad(rms, duration, current_time)
+            self._update_adaptive_energy_threshold(rms, current_time)
 
     def _update_vad(self, rms: float, duration: float, current_time: float):
         """Internal VAD state update."""
@@ -641,6 +711,12 @@ async def handle_websocket(websocket: WebSocket):
         VAD_ENERGY_THRESHOLD,
         AUDIO_SAMPLE_RATE,
         VAD_SPEECH_CONTINUE_RATIO,
+        VAD_ADAPTIVE_ENABLED,
+        VAD_ADAPTIVE_LOW_VARIANCE_SECONDS,
+        VAD_ADAPTIVE_RMS_DELTA_THRESHOLD,
+        VAD_ADAPTIVE_NOISE_MARGIN,
+        VAD_ADAPTIVE_MAX_MULTIPLIER,
+        VAD_ADAPTIVE_SMOOTHING,
     )
     is_processing = False
     stop_requested = asyncio.Event()
@@ -915,11 +991,11 @@ async def handle_websocket(websocket: WebSocket):
                     if "energy_threshold" in message:
                         new_threshold = float(message["energy_threshold"])
                         if 0 < new_threshold < 1.0:
-                            audio_buffer.energy_threshold = new_threshold
+                            audio_buffer.set_energy_threshold(new_threshold)
                             log(f"[Config] Updated VAD energy threshold to {new_threshold:.5f}")
                             await safe_send_json(websocket, {
                                 "type": "config_ack",
-                                "energy_threshold": new_threshold
+                                "energy_threshold": audio_buffer.energy_threshold
                             })
                         else:
                             log(f"[Config] Invalid energy_threshold: {new_threshold}")
