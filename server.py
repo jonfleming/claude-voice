@@ -528,7 +528,7 @@ class AudioBuffer:
         min_speech: float = 0.3,
         energy_threshold: float = 0.005,
         sample_rate: int = 16000,
-        speech_continue_ratio: float = 1.5,
+        speech_continue_ratio: float = 2.0,
         adaptive_enabled: bool = True,
         adaptive_low_variance_seconds: float = 3.0,
         adaptive_rms_delta_threshold: float = 0.0015,
