@@ -1227,7 +1227,7 @@ async def get_index():
                         return;
                     }
 
-                    ws = new WebSocket('ws://' + location.host + '/ws');
+                    ws = new WebSocket('wss://' + location.host + '/ws');
                     ws.binaryType = 'arraybuffer';
 
                     ws.onopen = () => {
